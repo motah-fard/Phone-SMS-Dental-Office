@@ -48,4 +48,4 @@ def missed_call_followup(first_name: str) -> str:
 def ai_disclosure_footer() -> str:
     """Appended to the first message in any new SMS thread -- same
     disclosure requirement as the voice opening, worded for text."""
-    return "(This is Ava, the practice's AI assistant — happy to help anytime!)"
+    return "(This is Moty, the practice's AI assistant — happy to help anytime!)"
