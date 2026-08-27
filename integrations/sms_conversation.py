@@ -6,8 +6,8 @@ Design goals:
 1. Handle the common cases (YES, RESCHEDULE, BOOK, picking an offered
    slot) with plain deterministic logic and zero LLM calls -- faster,
    free, and can't hallucinate a wrong appointment time. Only genuinely
-   open-ended replies fall back to the LLM (llm_fallback.py, not built
-   yet -- stubbed here).
+   open-ended replies fall back to the LLM (llm_fallback.py), which
+   gets its own tool access to the same booking functions.
 2. Identity verification before any fresh disclosure or change: a plain
    "YES" just acknowledges an appointment we already texted to this
    number (no new PHI revealed, low risk) and needs no extra check. But
@@ -30,6 +30,8 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import anthropic
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "conversation"))
 
@@ -39,6 +41,7 @@ from book import (
 )
 from availability import get_open_slots, find_soonest_slots_any_provider, AvailabilityError
 from business_hours import next_staffed_description
+from llm_fallback import handle_open_ended
 import sms_templates as t
 
 MAX_VERIFICATION_ATTEMPTS = 2
@@ -165,21 +168,20 @@ def _handle_inbound_sms_unsafe(from_phone: str, text: str, state: dict) -> tuple
                 date_str, time_str = fmt(new_start)
                 return t.new_appointment_confirmed(choice["provider_name"], date_str, time_str), state
 
-    # Anything else -- open-ended, needs the LLM. Not wired up yet.
-    return (
-        "[LLM fallback not wired up yet -- would hand this off to Moty with "
-        "the persona prompt + tool access to book.py functions]",
-        state,
-    )
+    # Anything else -- genuinely open-ended, hand off to the LLM (with
+    # tool access to the same booking functions, and the same warm
+    # persona) rather than guessing with more keyword matching.
+    return handle_open_ended(from_phone, text, state)
 
 
 def handle_inbound_sms(from_phone: str, text: str, state: dict) -> tuple[str, dict]:
-    """Returns (reply_text, updated_state). Never raises -- any database
-    or availability failure becomes a calm apology message instead of a
-    crash, so a bad moment in PracticeWorks connectivity never turns
-    into a broken conversation or a Telnyx retry storm."""
+    """Returns (reply_text, updated_state). Never raises -- any database,
+    availability, or LLM-API failure becomes a calm apology message
+    instead of a crash, so a bad moment in PracticeWorks connectivity or
+    a missing/invalid ANTHROPIC_API_KEY never turns into a broken
+    conversation or a Telnyx retry storm."""
     state = dict(state)  # don't mutate caller's copy
     try:
         return _handle_inbound_sms_unsafe(from_phone, text, state)
-    except (SchedulingError, AvailabilityError):
+    except (SchedulingError, AvailabilityError, anthropic.APIError):
         return t.system_trouble(next_staffed_description()), state
