@@ -26,11 +26,13 @@ State is a plain dict per phone number: {"offered_slots": [...],
 for persisting it (in-memory works for a demo; production should use a
 small table, not memory that resets on restart).
 """
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import anthropic
+import openai
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "conversation"))
@@ -41,8 +43,19 @@ from book import (
 )
 from availability import get_open_slots, find_soonest_slots_any_provider, AvailabilityError
 from business_hours import next_staffed_description
-from llm_fallback import handle_open_ended
 import sms_templates as t
+
+# Which LLM handles open-ended replies -- set LLM_PROVIDER=openai in .env
+# to use an OpenAI key instead of an Anthropic one (e.g. while testing
+# with existing OpenAI credit before an Anthropic account is set up).
+# Both implement the identical handle_open_ended(phone, text, state)
+# contract and share the same tool logic (llm_tools.py) -- swapping
+# providers changes nothing else in this file.
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+if LLM_PROVIDER == "openai":
+    from llm_fallback_openai import handle_open_ended
+else:
+    from llm_fallback import handle_open_ended
 
 MAX_VERIFICATION_ATTEMPTS = 2
 
@@ -183,5 +196,5 @@ def handle_inbound_sms(from_phone: str, text: str, state: dict) -> tuple[str, di
     state = dict(state)  # don't mutate caller's copy
     try:
         return _handle_inbound_sms_unsafe(from_phone, text, state)
-    except (SchedulingError, AvailabilityError, anthropic.APIError):
+    except (SchedulingError, AvailabilityError, anthropic.APIError, openai.APIError):
         return t.system_trouble(next_staffed_description()), state
