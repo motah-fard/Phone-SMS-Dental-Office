@@ -1,0 +1,15 @@
+# Never commit real data, credentials, or connection strings
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+config.local.*
+*credentials*
+*secret*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
