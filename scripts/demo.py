@@ -44,14 +44,14 @@ def main():
 
     caller_phone = "+15551230001"
     print(f"STEP 3: Inbound call/text from {caller_phone} — 'I need to reschedule'")
-    patient = resolve_patient_by_phone(caller_phone)
+    patient = resolve_patient_by_phone(caller_phone, actor="demo_script")
     print(f"  Resolved to pseudonymous patient_id={patient['patient_id']} "
           f"(first name '{patient['first_name']}' known ONLY to identity_lookup.db, "
           f"never touched by anything past this point)")
     line()
 
     print("STEP 4: Look up this patient's upcoming appointment(s) in the mirror DB (no PHI involved)")
-    appts = get_upcoming_appointments(patient["patient_id"])
+    appts = get_upcoming_appointments(patient["patient_id"], actor="demo_script")
     for a in appts:
         print(f"  Appointment #{a['appointment_id']}: {a['appt_type']} with {a['provider_name']} "
               f"at {a['start_time']} [{a['status']}]")
@@ -69,7 +69,8 @@ def main():
 
     print("STEP 6: Reschedule (writes to mirror, then writes back to source)")
     reschedule_appointment(
-        target["appointment_id"], new_start, new_end, patient["source_patient_id"]
+        target["appointment_id"], new_start, new_end, patient["source_patient_id"],
+        actor="demo_script", patient_id=patient["patient_id"],
     )
     line()
 
@@ -86,7 +87,7 @@ def main():
 
     print("STEP 8: Re-sync and confirm mirror reflects the same change")
     sync_module.sync()
-    appts_after = get_upcoming_appointments(patient["patient_id"])
+    appts_after = get_upcoming_appointments(patient["patient_id"], actor="demo_script")
     for a in appts_after:
         if a["appointment_id"] == target["appointment_id"]:
             print(f"  Mirror DB now shows: {a['start_time']} [{a['status']}]")

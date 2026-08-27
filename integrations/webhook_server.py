@@ -133,10 +133,11 @@ def telnyx_sms_webhook():
 @require_tools_secret
 def tool_get_upcoming_appointments():
     phone = request.json["phone"]
-    patient = resolve_patient_by_phone(phone)
+    patient = resolve_patient_by_phone(phone, actor="voice_tool:get_upcoming_appointments")
     if patient is None:
         return jsonify({"error": "no patient found for this phone number"}), 404
-    return jsonify({"appointments": get_upcoming_appointments(patient["patient_id"])})
+    appointments = get_upcoming_appointments(patient["patient_id"], actor="voice_tool:get_upcoming_appointments")
+    return jsonify({"appointments": appointments})
 
 
 @app.route("/tools/check_availability", methods=["POST"])
@@ -153,7 +154,7 @@ def tool_check_availability():
 def tool_reschedule_appointment():
     body = request.json
     phone = body["phone"]
-    patient = resolve_patient_by_phone(phone)
+    patient = resolve_patient_by_phone(phone, actor="voice_tool:reschedule_appointment")
     if patient is None:
         return jsonify({"error": "no patient found for this phone number"}), 404
     reschedule_appointment(
@@ -161,6 +162,8 @@ def tool_reschedule_appointment():
         datetime.fromisoformat(body["new_start"]),
         datetime.fromisoformat(body["new_end"]),
         patient["source_patient_id"],
+        actor="voice_tool:reschedule_appointment",
+        patient_id=patient["patient_id"],
     )
     return jsonify({"status": "rescheduled"})
 

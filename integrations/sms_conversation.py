@@ -34,7 +34,7 @@ def handle_inbound_sms(from_phone: str, text: str, state: dict) -> tuple[str, di
     text_clean = text.strip().upper()
     state = dict(state)  # don't mutate caller's copy
 
-    patient = resolve_patient_by_phone(from_phone)
+    patient = resolve_patient_by_phone(from_phone, actor="sms_webhook")
     if patient is None:
         return (
             "Hi! I couldn't find an account with this number -- please call "
@@ -44,7 +44,7 @@ def handle_inbound_sms(from_phone: str, text: str, state: dict) -> tuple[str, di
 
     # Patient is confirming their existing appointment.
     if text_clean == "YES":
-        appts = get_upcoming_appointments(patient["patient_id"])
+        appts = get_upcoming_appointments(patient["patient_id"], actor="sms_webhook")
         if not appts:
             return "Looks like there's nothing on the books to confirm right now!", state
         date_str, time_str = fmt(datetime.fromisoformat(appts[0]["start_time"]))
@@ -52,7 +52,7 @@ def handle_inbound_sms(from_phone: str, text: str, state: dict) -> tuple[str, di
 
     # Patient wants to reschedule -- offer real open slots, remember them.
     if "RESCHEDULE" in text_clean:
-        appts = get_upcoming_appointments(patient["patient_id"])
+        appts = get_upcoming_appointments(patient["patient_id"], actor="sms_webhook")
         if not appts:
             return "I don't see an upcoming appointment to reschedule -- want to book a new one instead?", state
         target = appts[0]
@@ -65,7 +65,7 @@ def handle_inbound_sms(from_phone: str, text: str, state: dict) -> tuple[str, di
         state["offered_slots"] = [
             {"label": lbl, "appointment_id": target["appointment_id"],
              "provider_id": target["provider_id"], "provider_name": target["provider_name"],
-             "source_patient_id": patient["source_patient_id"],
+             "source_patient_id": patient["source_patient_id"], "patient_id": patient["patient_id"],
              "start": s.isoformat(), "end": e.isoformat()}
             for lbl, s, e in labeled
         ]
@@ -79,7 +79,8 @@ def handle_inbound_sms(from_phone: str, text: str, state: dict) -> tuple[str, di
             new_start = datetime.fromisoformat(choice["start"])
             new_end = datetime.fromisoformat(choice["end"])
             reschedule_appointment(
-                choice["appointment_id"], new_start, new_end, choice["source_patient_id"]
+                choice["appointment_id"], new_start, new_end, choice["source_patient_id"],
+                actor="sms_webhook", patient_id=choice["patient_id"],
             )
             date_str, time_str = fmt(new_start)
             state.pop("offered_slots", None)

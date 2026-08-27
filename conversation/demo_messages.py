@@ -22,8 +22,8 @@ def fmt(dt_str):
 
 
 def main():
-    patient = resolve_patient_by_phone("+15551230001")
-    appts = get_upcoming_appointments(patient["patient_id"])
+    patient = resolve_patient_by_phone("+15551230001", actor="demo_script")
+    appts = get_upcoming_appointments(patient["patient_id"], actor="demo_script")
     appt = appts[0]
     date_str, time_str = fmt(appt["start_time"])
 

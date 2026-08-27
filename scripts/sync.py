@@ -6,8 +6,12 @@ actual PracticeWorks integration mechanism is confirmed. Everything
 downstream (availability, booking) only depends on the mirror/lookup
 schemas, not on how the source is read.
 """
+import sys
 import sqlite3
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "mirror_system"))
+from audit_log import log_access
 
 SOURCE_DB = Path(__file__).parent.parent / "source_system" / "practiceworks_sim.db"
 MIRROR_DB = Path(__file__).parent.parent / "mirror_system" / "mirror.db"
@@ -42,6 +46,7 @@ def sync():
     for row in lookup_cur.execute("SELECT patient_id, source_patient_id FROM identity_map"):
         source_to_pseudo[row[1]] = row[0]
 
+    new_identities = 0
     for row in src_cur.execute("SELECT id, first_name, last_name, dob, phone FROM patients"):
         src_id, first, last, dob, phone = row
         if src_id not in source_to_pseudo:
@@ -51,11 +56,13 @@ def sync():
                 (pid, src_id, first, last, phone, dob),
             )
             source_to_pseudo[src_id] = pid
+            new_identities += 1
 
     lookup.commit()
 
     # --- appointments: map to pseudonymous patient_id, no PHI carried over ---
     mirror_cur.execute("DELETE FROM appointments")
+    synced_appointments = 0
     for row in src_cur.execute(
         "SELECT id, patient_id, provider_id, start_time, end_time, status, appt_type FROM appointments"
     ):
@@ -65,11 +72,17 @@ def sync():
             "INSERT INTO appointments VALUES (?, ?, ?, ?, ?, ?, ?)",
             (appt_id, pseudo_id, provider_id, start, end, status, appt_type),
         )
+        synced_appointments += 1
 
     mirror.commit()
     src.close()
     mirror.close()
     lookup.close()
+
+    log_access(
+        "sync_job", "sync_source_to_mirror",
+        detail=f"{new_identities} new identity mapping(s), {synced_appointments} appointment(s) synced",
+    )
     print("Sync complete: source -> mirror + identity_lookup")
 
 
