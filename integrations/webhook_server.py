@@ -46,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from sms_conversation import handle_inbound_sms
 from telnyx_client import send_sms
-from book import resolve_patient_by_phone, get_upcoming_appointments, reschedule_appointment
+from book import get_upcoming_appointments, reschedule_appointment, verify_patient, parse_dob
 from availability import get_open_slots
 
 app = Flask(__name__)
@@ -128,14 +128,41 @@ def telnyx_sms_webhook():
 # Telnyx/assistant side, never from something the caller says out loud --
 # otherwise anyone could claim to be a different patient's phone number
 # and reach their appointment data. See docs/telnyx_assistant_tools.md.
+#
+# Every tool below that touches appointment data requires `dob` too --
+# a phone call has no equivalent to SMS's "we already texted this exact
+# info to this number" shortcut, so every voice call verifies phone +
+# date of birth (book.verify_patient) before anything is disclosed or
+# changed, full stop.
+
+@app.route("/tools/verify_patient", methods=["POST"])
+@require_tools_secret
+def tool_verify_patient():
+    """Call this first, once, at the start of a call. The assistant
+    should ask for date of birth naturally (see conversation/voice_persona.md)
+    and pass what the caller says here in dob (MM/DD/YYYY) -- this endpoint
+    does the normalization and the actual match."""
+    phone = request.json["phone"]
+    dob_raw = request.json["dob"]
+    dob = parse_dob(dob_raw)
+    if dob is None:
+        return jsonify({"verified": False, "error": "could not parse date of birth"}), 400
+    patient = verify_patient(phone, dob, actor="voice_tool:verify_patient")
+    if patient is None:
+        return jsonify({"verified": False}), 404
+    return jsonify({"verified": True, "first_name": patient["first_name"]})
+
 
 @app.route("/tools/get_upcoming_appointments", methods=["POST"])
 @require_tools_secret
 def tool_get_upcoming_appointments():
     phone = request.json["phone"]
-    patient = resolve_patient_by_phone(phone, actor="voice_tool:get_upcoming_appointments")
+    dob = parse_dob(request.json["dob"])
+    if dob is None:
+        return jsonify({"error": "could not parse date of birth"}), 400
+    patient = verify_patient(phone, dob, actor="voice_tool:get_upcoming_appointments")
     if patient is None:
-        return jsonify({"error": "no patient found for this phone number"}), 404
+        return jsonify({"error": "could not verify patient"}), 404
     appointments = get_upcoming_appointments(patient["patient_id"], actor="voice_tool:get_upcoming_appointments")
     return jsonify({"appointments": appointments})
 
@@ -154,9 +181,12 @@ def tool_check_availability():
 def tool_reschedule_appointment():
     body = request.json
     phone = body["phone"]
-    patient = resolve_patient_by_phone(phone, actor="voice_tool:reschedule_appointment")
+    dob = parse_dob(body["dob"])
+    if dob is None:
+        return jsonify({"error": "could not parse date of birth"}), 400
+    patient = verify_patient(phone, dob, actor="voice_tool:reschedule_appointment")
     if patient is None:
-        return jsonify({"error": "no patient found for this phone number"}), 404
+        return jsonify({"error": "could not verify patient"}), 404
     reschedule_appointment(
         body["appointment_id"],
         datetime.fromisoformat(body["new_start"]),

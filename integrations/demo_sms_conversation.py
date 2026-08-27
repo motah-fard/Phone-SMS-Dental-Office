@@ -22,6 +22,8 @@ def send(text, state):
 def main():
     state = {}
     state = send("RESCHEDULE", state)
+    state = send("01/01/1975", state)  # wrong DOB -- Maria's is 1988-04-12
+    state = send("04/12/1988", state)  # correct -- verification succeeds, slots offered
     state = send("2", state)
     state = send("YES", state)
 

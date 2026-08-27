@@ -28,6 +28,13 @@ LOOKUP_DB = Path(__file__).parent.parent / "mirror_system" / "identity_lookup.db
 
 
 def resolve_patient_by_phone(phone: str, actor: str = "unknown"):
+    """Phone-only lookup. This is NOT sufficient identity verification for
+    an inbound caller/texter claiming to be a patient -- caller ID can be
+    spoofed, and a phone can belong to a family member or a lost/stolen
+    device. Use this only for system-initiated contact where WE are
+    reaching out to a number already on file (e.g. sending a reminder),
+    never to authenticate someone claiming to be a patient. For that,
+    use verify_patient() below."""
     conn = sqlite3.connect(LOOKUP_DB)
     cur = conn.cursor()
     cur.execute(
@@ -44,6 +51,50 @@ def resolve_patient_by_phone(phone: str, actor: str = "unknown"):
     patient_id, first_name, source_patient_id = row
     log_access(actor, "resolve_patient_by_phone", patient_id=patient_id)
     return {"patient_id": patient_id, "first_name": first_name, "source_patient_id": source_patient_id}
+
+
+def verify_patient(phone: str, dob: str, actor: str = "unknown"):
+    """Two-factor identity verification for anyone calling/texting in and
+    claiming to be a patient -- phone number plus date of birth, per
+    standard HIPAA call-center guidance (two independent identifiers,
+    never caller ID alone). `dob` must already be normalized to
+    'YYYY-MM-DD' -- see parse_dob().
+
+    Required before disclosing or changing appointment data in response
+    to anything an inbound caller/texter asked for. Not required for
+    resolve_patient_by_phone's system-initiated use case above."""
+    conn = sqlite3.connect(LOOKUP_DB)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT patient_id, first_name, source_patient_id FROM identity_map WHERE phone = ? AND dob = ?",
+        (phone, dob),
+    )
+    row = cur.fetchone()
+    conn.close()
+
+    if row is None:
+        log_access(actor, "verify_patient", detail=f"failed verification, phone ending {phone[-4:]}", success=False)
+        return None
+
+    patient_id, first_name, source_patient_id = row
+    log_access(actor, "verify_patient", patient_id=patient_id)
+    return {"patient_id": patient_id, "first_name": first_name, "source_patient_id": source_patient_id}
+
+
+def parse_dob(text: str) -> str | None:
+    """Normalizes a spoken/typed date of birth into 'YYYY-MM-DD' to match
+    identity_lookup's storage format. Returns None if it doesn't look
+    like a date at all -- callers should treat that as "ask again",
+    not as a failed verification (those are different failure modes:
+    one is "I couldn't understand you," the other is "that doesn't
+    match our records")."""
+    text = text.strip()
+    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
 
 
 def get_upcoming_appointments(patient_id: str, actor: str = "unknown"):

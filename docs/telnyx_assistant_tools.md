@@ -26,20 +26,39 @@ caller state their own phone number in conversation and pass that
 straight into these tools, anyone could claim to be a different
 patient's number and reach that patient's appointment data.
 
+**Identity verification is required on every call, no exceptions.** A
+phone call has no equivalent to the SMS path's "we already texted this
+exact info to this number" shortcut -- HIPAA's own call-center guidance
+is to never rely on caller ID alone and to verify at least two
+independent identifiers. So the assistant must call `verify_patient`
+first, early in the call, before `get_upcoming_appointments` or
+`reschedule_appointment` -- both of those also independently require
+`dob` and will fail verification server-side even if somehow called
+without it first, but the conversation should ask naturally rather than
+relying on that fallback. See `conversation/voice_persona.md` for how
+to phrase the ask warmly.
+
+### verify_patient
+- **Endpoint:** `POST /tools/verify_patient`
+- **Description:** "Verify the caller's identity using their phone number and date of birth, before discussing any appointment details."
+- **Parameters:** `{"phone": "string, from verified caller-ID metadata", "dob": "string, date of birth as stated by the caller, e.g. MM/DD/YYYY"}`
+- Call this first. If `verified` comes back `false`, do not proceed to the tools below -- ask the caller to double check their date of birth once, and if it fails again, offer to transfer to the front desk.
+
 ### get_upcoming_appointments
 - **Endpoint:** `POST /tools/get_upcoming_appointments`
-- **Description:** "Look up the caller's upcoming appointment(s) by phone number."
-- **Parameters:** `{"phone": "string, caller's phone number in E.164 format"}`
+- **Description:** "Look up the caller's upcoming appointment(s), once verified."
+- **Parameters:** `{"phone": "string", "dob": "string, same value already confirmed via verify_patient"}`
 
 ### check_availability
 - **Endpoint:** `POST /tools/check_availability`
 - **Description:** "Get open appointment slots for a provider on a given day."
 - **Parameters:** `{"provider_id": "integer", "day": "ISO date string"}`
+- No patient data involved -- doesn't require verification.
 
 ### reschedule_appointment
 - **Endpoint:** `POST /tools/reschedule_appointment`
-- **Description:** "Move an existing appointment to a new confirmed time slot."
-- **Parameters:** `{"phone": "string", "appointment_id": "integer", "new_start": "ISO datetime", "new_end": "ISO datetime"}`
+- **Description:** "Move an existing appointment to a new confirmed time slot, once verified."
+- **Parameters:** `{"phone": "string", "dob": "string", "appointment_id": "integer", "new_start": "ISO datetime", "new_end": "ISO datetime"}`
 
 ## Why tools instead of raw call scripting
 
