@@ -42,7 +42,13 @@ to phrase the ask warmly.
 - **Endpoint:** `POST /tools/verify_patient`
 - **Description:** "Verify the caller's identity using their phone number and date of birth, before discussing any appointment details."
 - **Parameters:** `{"phone": "string, from verified caller-ID metadata", "dob": "string, date of birth as stated by the caller, e.g. MM/DD/YYYY"}`
-- Call this first. If `verified` comes back `false`, do not proceed to the tools below -- ask the caller to double check their date of birth once, and if it fails again, offer to transfer to the front desk.
+- Call this first. If `verified` comes back `false`, ask the caller to double check their date of birth once. If it fails again, check `check_staffed_hours` before deciding whether to offer a transfer or an after-hours callback -- see below, never assume a transfer is possible.
+
+### check_staffed_hours
+- **Endpoint:** `POST /tools/check_staffed_hours`
+- **Description:** "Check whether front-desk staff are available right now, before offering to transfer the caller."
+- **Parameters:** none
+- Returns `{"staffed": bool, "next_available": "human-readable phrase"}`. Call this before EVERY escalation/transfer offer -- office hours are Mon-Fri 8am-5pm only. If `staffed` is false, never say "let me connect you" -- say a callback will happen at `next_available` instead.
 
 ### get_upcoming_appointments
 - **Endpoint:** `POST /tools/get_upcoming_appointments`
@@ -51,9 +57,20 @@ to phrase the ask warmly.
 
 ### check_availability
 - **Endpoint:** `POST /tools/check_availability`
-- **Description:** "Get open appointment slots for a provider on a given day."
+- **Description:** "Get open appointment slots for one specific provider on a given day -- use when rescheduling an existing appointment (the provider is already known)."
 - **Parameters:** `{"provider_id": "integer", "day": "ISO date string"}`
 - No patient data involved -- doesn't require verification.
+
+### find_new_appointment_slots
+- **Endpoint:** `POST /tools/find_new_appointment_slots`
+- **Description:** "Find the soonest available appointment across any provider, for a caller who doesn't have an existing appointment yet (or wants an additional one)."
+- **Parameters:** `{"phone": "string", "dob": "string"}`
+- Returns the soonest provider/day/time combination, starting tomorrow. Requires verification, same as the tools above.
+
+### book_new_appointment
+- **Endpoint:** `POST /tools/book_new_appointment`
+- **Description:** "Book a brand-new appointment at a specific time slot returned by find_new_appointment_slots."
+- **Parameters:** `{"phone": "string", "dob": "string", "provider_id": "integer", "new_start": "ISO datetime", "new_end": "ISO datetime"}`
 
 ### reschedule_appointment
 - **Endpoint:** `POST /tools/reschedule_appointment`

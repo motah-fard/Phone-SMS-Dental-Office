@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "mirror_system"))
 from init_source_db import init_db as init_source_db
 from init_mirror_db import init_mirror_db, init_lookup_db
 import sync as sync_module
-from availability import get_open_slots
+from availability import find_soonest_slots
 from book import resolve_patient_by_phone, get_upcoming_appointments, reschedule_appointment
 
 SOURCE_DB = Path(__file__).parent.parent / "source_system" / "practiceworks_sim.db"
@@ -58,12 +58,11 @@ def main():
     target = appts[0]
     line()
 
-    print(f"STEP 5: Find open slots with {target['provider_name']} two days out")
-    day = datetime.now() + timedelta(days=2)
-    slots = get_open_slots(target["provider_id"], day)
-    for s, e in slots[:5]:
+    print(f"STEP 5: Find the soonest open slots with {target['provider_name']} (skips closed weekends automatically)")
+    slots = find_soonest_slots(target["provider_id"], datetime.now() + timedelta(days=1), limit=5)
+    for s, e in slots:
         print(f"  Available: {s.strftime('%Y-%m-%d %H:%M')} - {e.strftime('%H:%M')}")
-    new_start, new_end = slots[2]
+    new_start, new_end = slots[min(2, len(slots) - 1)]
     print(f"  -> Offering and booking: {new_start.strftime('%Y-%m-%d %H:%M')}")
     line()
 

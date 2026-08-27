@@ -12,19 +12,30 @@ import requests
 TELNYX_API_KEY = os.environ.get("TELNYX_API_KEY")
 TELNYX_PHONE_NUMBER = os.environ.get("TELNYX_PHONE_NUMBER")
 TELNYX_MESSAGES_URL = "https://api.telnyx.com/v2/messages"
+REQUEST_TIMEOUT_SECONDS = 10
+
+
+class TelnyxError(Exception):
+    """Raised for any failure sending via Telnyx -- missing credentials,
+    network failure, or a non-2xx response. Callers should catch this
+    specifically rather than letting requests' own exception types leak
+    into webhook_server.py's error handling."""
 
 
 def send_sms(to_phone: str, body: str) -> dict:
     if not TELNYX_API_KEY or not TELNYX_PHONE_NUMBER:
-        raise RuntimeError(
+        raise TelnyxError(
             "TELNYX_API_KEY / TELNYX_PHONE_NUMBER not set -- can't send for real yet, "
             "this needs the Telnyx account + BAA in place first."
         )
-    response = requests.post(
-        TELNYX_MESSAGES_URL,
-        headers={"Authorization": f"Bearer {TELNYX_API_KEY}"},
-        json={"from": TELNYX_PHONE_NUMBER, "to": to_phone, "text": body},
-        timeout=10,
-    )
-    response.raise_for_status()
-    return response.json()
+    try:
+        response = requests.post(
+            TELNYX_MESSAGES_URL,
+            headers={"Authorization": f"Bearer {TELNYX_API_KEY}"},
+            json={"from": TELNYX_PHONE_NUMBER, "to": to_phone, "text": body},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        raise TelnyxError(f"failed to send SMS via Telnyx: {e}") from e

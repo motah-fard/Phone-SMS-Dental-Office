@@ -5,8 +5,8 @@ Flask app Telnyx calls into. Two jobs:
    sms_conversation.py, sends the reply back via telnyx_client.
 2. /tools/* -- endpoints meant to be registered as "webhook tools" on a
    Telnyx AI Voice Assistant (see docs/telnyx_assistant_tools.md), so the
-   voice AI can check availability / reschedule during a live call the
-   same way the SMS path does.
+   voice AI can check availability / book / reschedule during a live
+   call the same way the SMS path does.
 
 Security, both required before this ever goes live (not optional
 hardening -- these endpoints touch PHI):
@@ -19,6 +19,11 @@ hardening -- these endpoints touch PHI):
   covered by Telnyx's webhook signing scheme the same way, and without
   this check anyone with the URL could look up or reschedule any
   patient's appointment by guessing/knowing their phone number.
+
+Error handling: every custom exception raised anywhere in book.py or
+availability.py is caught here (or in sms_conversation.py for the SMS
+path) and turned into a clean, non-leaking response -- a caller/texter
+never sees a raw stack trace or database error message.
 
 Nothing here can run for real without a Telnyx account + phone number +
 webhook pointed at wherever this is hosted (needs real HTTPS -- a
@@ -33,7 +38,7 @@ import hmac
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
@@ -43,11 +48,16 @@ from nacl.exceptions import BadSignatureError
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "conversation"))
 
 from sms_conversation import handle_inbound_sms
-from telnyx_client import send_sms
-from book import get_upcoming_appointments, reschedule_appointment, verify_patient, parse_dob
-from availability import get_open_slots
+from telnyx_client import send_sms, TelnyxError
+from book import (
+    get_upcoming_appointments, reschedule_appointment, book_new_appointment,
+    verify_patient, parse_dob, SchedulingError,
+)
+from availability import get_open_slots, find_soonest_slots_any_provider, AvailabilityError
+from business_hours import is_staffed, next_staffed_description
 
 app = Flask(__name__)
 
@@ -65,9 +75,19 @@ def handle_malformed_request(error):
     try/except while still failing cleanly on bad input."""
     return jsonify({"error": f"malformed request: {error}"}), 400
 
+
+@app.errorhandler(SchedulingError)
+@app.errorhandler(AvailabilityError)
+def handle_backend_failure(error):
+    """A database/availability failure inside book.py or availability.py.
+    The real cause is already in the audit log (both modules log before
+    raising) -- this response deliberately doesn't repeat it back to the
+    caller, just a generic 'try again' signal."""
+    return jsonify({"error": "temporarily unable to access scheduling data, please try again shortly"}), 503
+
+
 TELNYX_PUBLIC_KEY = os.environ.get("TELNYX_PUBLIC_KEY")
 TOOLS_SHARED_SECRET = os.environ.get("TOOLS_SHARED_SECRET")
-
 
 WEBHOOK_MAX_AGE_SECONDS = 300  # reject anything older -- blocks replay of a captured valid request
 
@@ -116,10 +136,24 @@ def telnyx_sms_webhook():
     text = payload["text"]
 
     state = _conversation_state.get(from_phone, {})
+    # handle_inbound_sms never raises (it catches its own backend errors
+    # and returns a calm apology message instead) -- so no try/except
+    # needed here for that. Sending the reply is a separate failure mode.
     reply, new_state = handle_inbound_sms(from_phone, text, state)
     _conversation_state[from_phone] = new_state
 
-    send_sms(from_phone, reply)
+    try:
+        send_sms(from_phone, reply)
+    except TelnyxError as e:
+        # The conversation logic already ran and state is saved -- the
+        # patient just doesn't get this particular reply. Telnyx will
+        # likely retry the inbound webhook if we return non-2xx, which
+        # would re-run the conversation logic unexpectedly, so we still
+        # return ok here but this failure needs real monitoring/alerting
+        # before go-live, not just a print statement.
+        print(f"[telnyx_sms_webhook] failed to send reply to {from_phone}: {e}")
+        return jsonify({"status": "reply_send_failed"}), 200
+
     return jsonify({"status": "ok"})
 
 
@@ -143,14 +177,23 @@ def tool_verify_patient():
     and pass what the caller says here in dob (MM/DD/YYYY) -- this endpoint
     does the normalization and the actual match."""
     phone = request.json["phone"]
-    dob_raw = request.json["dob"]
-    dob = parse_dob(dob_raw)
+    dob = parse_dob(request.json["dob"])
     if dob is None:
         return jsonify({"verified": False, "error": "could not parse date of birth"}), 400
     patient = verify_patient(phone, dob, actor="voice_tool:verify_patient")
     if patient is None:
         return jsonify({"verified": False}), 404
     return jsonify({"verified": True, "first_name": patient["first_name"]})
+
+
+@app.route("/tools/check_staffed_hours", methods=["POST"])
+@require_tools_secret
+def tool_check_staffed_hours():
+    """Call this before ever offering to transfer to a live person.
+    The assistant must never say it can connect the caller to staff
+    when this returns staffed=false -- say when someone will follow up
+    instead (next_available), never imply someone could pick up now."""
+    return jsonify({"staffed": is_staffed(), "next_available": next_staffed_description()})
 
 
 @app.route("/tools/get_upcoming_appointments", methods=["POST"])
@@ -174,6 +217,51 @@ def tool_check_availability():
     day = datetime.fromisoformat(request.json["day"])
     slots = get_open_slots(provider_id, day)
     return jsonify({"slots": [{"start": s.isoformat(), "end": e.isoformat()} for s, e in slots]})
+
+
+@app.route("/tools/find_new_appointment_slots", methods=["POST"])
+@require_tools_secret
+def tool_find_new_appointment_slots():
+    """For booking a brand-new appointment (no existing one to anchor
+    to) -- finds the soonest availability across any provider, starting
+    tomorrow. Requires verification first, same as the other tools that
+    touch patient-specific booking."""
+    phone = request.json["phone"]
+    dob = parse_dob(request.json["dob"])
+    if dob is None:
+        return jsonify({"error": "could not parse date of birth"}), 400
+    patient = verify_patient(phone, dob, actor="voice_tool:find_new_appointment_slots")
+    if patient is None:
+        return jsonify({"error": "could not verify patient"}), 404
+    provider, slots = find_soonest_slots_any_provider(datetime.now() + timedelta(days=1))
+    if not slots:
+        return jsonify({"slots": [], "provider": None})
+    return jsonify({
+        "provider": provider,
+        "slots": [{"start": s.isoformat(), "end": e.isoformat()} for s, e in slots],
+    })
+
+
+@app.route("/tools/book_new_appointment", methods=["POST"])
+@require_tools_secret
+def tool_book_new_appointment():
+    body = request.json
+    phone = body["phone"]
+    dob = parse_dob(body["dob"])
+    if dob is None:
+        return jsonify({"error": "could not parse date of birth"}), 400
+    patient = verify_patient(phone, dob, actor="voice_tool:book_new_appointment")
+    if patient is None:
+        return jsonify({"error": "could not verify patient"}), 404
+    new_id = book_new_appointment(
+        patient["patient_id"],
+        patient["source_patient_id"],
+        body["provider_id"],
+        datetime.fromisoformat(body["new_start"]),
+        datetime.fromisoformat(body["new_end"]),
+        actor="voice_tool:book_new_appointment",
+    )
+    return jsonify({"status": "booked", "appointment_id": new_id})
 
 
 @app.route("/tools/reschedule_appointment", methods=["POST"])
