@@ -41,7 +41,7 @@ from book import (
     resolve_patient_by_phone, get_upcoming_appointments, reschedule_appointment,
     book_new_appointment, verify_patient, parse_dob, SchedulingError,
 )
-from availability import get_open_slots, find_soonest_slots_any_provider, AvailabilityError
+from availability import find_soonest_slots, find_soonest_slots_any_provider, AvailabilityError
 from business_hours import next_staffed_description
 import sms_templates as t
 
@@ -65,12 +65,19 @@ def fmt(dt: datetime):
 
 
 def _offer_reschedule_slots(patient: dict, state: dict) -> tuple[str, dict]:
+    """Searches forward from the existing appointment's day, not just
+    that one exact day -- if the appointment happens to fall on what's
+    now a closed day (or that day fills up), we still want to offer the
+    next real availability, not report "fully booked" when there's
+    plenty open two days later. Found via a real test failure: the
+    seeded appointment's day landed on a Saturday, and the old
+    single-day check reported "fully booked" instead of searching on."""
     appts = get_upcoming_appointments(patient["patient_id"], actor="sms_webhook")
     if not appts:
         return t.nothing_to_reschedule(), state
     target = appts[0]
     day = datetime.fromisoformat(target["start_time"])
-    slots = get_open_slots(target["provider_id"], day)[:3]
+    slots = find_soonest_slots(target["provider_id"], day, limit=3)
     if not slots:
         return t.fully_booked_that_day(target["provider_name"], next_staffed_description()), state
 

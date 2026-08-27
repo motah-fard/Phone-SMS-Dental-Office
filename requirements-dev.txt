@@ -1,0 +1,4 @@
+# Testing only -- not needed to run the actual application.
+-r requirements.txt
+pytest
+pytest-cov

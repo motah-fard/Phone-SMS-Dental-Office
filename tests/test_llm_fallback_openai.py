@@ -1,19 +1,13 @@
 """
-OpenAI equivalent of test_llm_fallback.py -- same three properties
-proven, against llm_fallback_openai.py instead, with a fake OpenAI
-client so no real OPENAI_API_KEY is needed. Confirms the two provider
-modules behave identically from sms_conversation.py's point of view.
+OpenAI equivalent of test_llm_fallback.py -- same properties proven,
+against llm_fallback_openai.py instead, with a fake OpenAI client so no
+real OPENAI_API_KEY is needed. Confirms the two provider modules behave
+identically from sms_conversation.py's point of view.
 
-Run: python3 scripts/demo.py   (populates the databases first)
-     python3 tests/test_llm_fallback_openai.py
+Run: pytest tests/test_llm_fallback_openai.py
 """
 import json
-import sys
-from pathlib import Path
 from types import SimpleNamespace
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "integrations"))
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from llm_fallback_openai import handle_open_ended
 
@@ -38,14 +32,7 @@ class FakeClient:
         return self.script.pop(0)
 
 
-def check(label, condition):
-    status = "PASS" if condition else "FAIL"
-    print(f"[{status}] {label}")
-    if not condition:
-        raise SystemExit(1)
-
-
-def test_verify_then_read_appointments():
+def test_verify_then_read_appointments(fresh_db):
     script = [
         fake_response(None, [fake_tool_call("verify_patient", {"dob": "04/12/1988"}, "call_1")]),
         fake_response(None, [fake_tool_call("get_upcoming_appointments", {}, "call_2")]),
@@ -57,12 +44,12 @@ def test_verify_then_read_appointments():
         "+15551230001", "what's my next appointment?", {}, client=client,
     )
 
-    check("model was called exactly 3 times (2 tool turns + final answer)", client.calls == 3)
-    check("final reply text passed through correctly", "cleaning with Dr. Lee" in reply)
-    check("session records the verified patient by pseudonymous id", state["llm_session"]["verified_patient"]["patient_id"] == "PT-0001")
+    assert client.calls == 3
+    assert "cleaning with Dr. Lee" in reply
+    assert state["llm_session"]["verified_patient"]["patient_id"] == "PT-0001"
 
 
-def test_phone_cannot_be_overridden_by_model():
+def test_phone_cannot_be_overridden_by_model(fresh_db):
     script = [
         fake_response(None, [fake_tool_call(
             "verify_patient", {"dob": "04/12/1988", "phone": "+19995551234"}, "call_1",
@@ -73,13 +60,41 @@ def test_phone_cannot_be_overridden_by_model():
 
     reply, state = handle_open_ended("+15551230001", "verify me", {}, client=client)
 
-    check(
-        "verification used the REAL transport phone (+15551230001), not the fake one in tool_input",
-        state["llm_session"]["verified_patient"]["patient_id"] == "PT-0001",
-    )
+    assert state["llm_session"]["verified_patient"]["patient_id"] == "PT-0001"
 
 
-if __name__ == "__main__":
-    test_verify_then_read_appointments()
-    test_phone_cannot_be_overridden_by_model()
-    print("\nAll llm_fallback_openai tests passed.")
+def test_tool_before_verification_fails_cleanly(fresh_db):
+    script = [
+        fake_response(None, [fake_tool_call("get_upcoming_appointments", {}, "call_1")]),
+        fake_response("I'll need to verify your date of birth first."),
+    ]
+    client = FakeClient(script)
+
+    reply, state = handle_open_ended("+15551230001", "what's my appointment?", {}, client=client)
+
+    assert "verify" in reply.lower()
+    assert "verified_patient" not in state["llm_session"]
+
+
+def test_hits_max_tool_iterations_without_looping_forever(fresh_db):
+    from llm_fallback_openai import MAX_TOOL_ITERATIONS
+    script = [
+        fake_response(None, [fake_tool_call("check_staffed_hours", {}, f"call_{i}")])
+        for i in range(MAX_TOOL_ITERATIONS)
+    ]
+    client = FakeClient(script)
+
+    reply, state = handle_open_ended("+15551230001", "are you open?", {}, client=client)
+
+    assert "front-desk team" in reply
+    assert client.calls == MAX_TOOL_ITERATIONS
+
+
+def test_history_is_capped_on_a_long_running_thread(fresh_db):
+    from llm_fallback_openai import MAX_HISTORY_MESSAGES
+    state = {"llm_history": [{"role": "user", "content": f"msg {i}"} for i in range(30)]}
+    client = FakeClient([fake_response("ok")])
+
+    _, state = handle_open_ended("+15551230001", "one more", state, client=client)
+
+    assert len(state["llm_history"]) <= MAX_HISTORY_MESSAGES + 1

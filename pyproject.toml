@@ -1,0 +1,23 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = [
+    "scripts",
+    "mirror_system",
+    "source_system",
+    "conversation",
+    "integrations",
+]
+omit = [
+    # Can't import pyodbc at all without a native ODBC driver manager
+    # installed (unixODBC/iODBC) -- this module is an intentional stub
+    # anyway, pending the real Pervasive DSN from the office server (see
+    # docs/practiceworks_schema_notes.md). Nothing to unit-test here yet.
+    "*/pervasive_odbc_source.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "if __name__ == .__main__.:",
+]
