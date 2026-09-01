@@ -295,8 +295,69 @@ def test_book_new_appointment_raises_scheduling_error_when_mirror_insert_fails(f
 
 def test_book_new_appointment_raises_scheduling_error_when_source_insert_fails(fresh_db, monkeypatch):
     """Id generation reads SOURCE_DB successfully (1st connection); the
-    later INSERT into SOURCE_DB (2nd connection) is what fails -- the
-    mirror insert must have already succeeded by this point."""
+    later INSERT into SOURCE_DB (2nd connection) is what fails. The
+    sqlite path writes source before mirror, so mirror never gets
+    touched at all when this fails -- unlike reschedule_appointment,
+    where mirror is written first."""
     monkeypatch.setattr(book.sqlite3, "connect", _fail_on_nth_connect_to(book.SOURCE_DB, fail_on_call_number=2))
     with pytest.raises(book.SchedulingError):
+        book.book_new_appointment("PT-0001", 1, 1, datetime.now(), datetime.now() + timedelta(minutes=30), actor="test")
+
+
+def test_book_new_appointment_uses_pervasive_write_when_backend_selected(fresh_db, monkeypatch):
+    """SOURCE_BACKEND=pervasive must call pervasive_odbc_source.write_new_appointment
+    (which generates its own real Visit ID) instead of the fake id-generation
+    + SOURCE_DB insert -- and that same id must land in the mirror too."""
+    calls = []
+    fake_module = types.ModuleType("pervasive_odbc_source")
+
+    def fake_write_new_appointment(patient_id, provider_id, start, end, description):
+        calls.append((patient_id, provider_id, start, end, description))
+        return 9999  # a real Visit ID far outside our fake data's id range
+
+    fake_module.write_new_appointment = fake_write_new_appointment
+    monkeypatch.setitem(sys.modules, "pervasive_odbc_source", fake_module)
+    monkeypatch.setattr(book, "SOURCE_BACKEND", "pervasive")
+
+    start = datetime.now() + timedelta(days=5)
+    end = start + timedelta(minutes=30)
+    new_id = book.book_new_appointment("PT-0001", 1, provider_id=1, start=start, end=end, actor="test")
+
+    assert new_id == 9999
+    assert calls == [(1, 1, start, end, "New Appointment")]
+
+    import sqlite3
+    mirror = sqlite3.connect(book.MIRROR_DB)
+    row = mirror.execute("SELECT patient_id, provider_id FROM appointments WHERE id = 9999").fetchone()
+    mirror.close()
+    assert row == ("PT-0001", 1)
+
+
+def test_book_new_appointment_pervasive_failure_raises_scheduling_error(fresh_db, monkeypatch):
+    fake_module = types.ModuleType("pervasive_odbc_source")
+
+    def boom(patient_id, provider_id, start, end, description):
+        raise RuntimeError("simulated ODBC insert failure")
+
+    fake_module.write_new_appointment = boom
+    monkeypatch.setitem(sys.modules, "pervasive_odbc_source", fake_module)
+    monkeypatch.setattr(book, "SOURCE_BACKEND", "pervasive")
+
+    with pytest.raises(book.SchedulingError):
+        book.book_new_appointment("PT-0001", 1, 1, datetime.now(), datetime.now() + timedelta(minutes=30), actor="test")
+
+
+def test_book_new_appointment_pervasive_mirror_failure_self_heals_message(fresh_db, monkeypatch):
+    """If the real source insert succeeds but the LOCAL mirror insert
+    then fails, the error should say this is self-healing (the next
+    sync will pick it up), not the more alarming reconciliation warning
+    reschedule_appointment uses -- these are genuinely different
+    failure modes."""
+    fake_module = types.ModuleType("pervasive_odbc_source")
+    fake_module.write_new_appointment = lambda patient_id, provider_id, start, end, description: 9999
+    monkeypatch.setitem(sys.modules, "pervasive_odbc_source", fake_module)
+    monkeypatch.setattr(book, "SOURCE_BACKEND", "pervasive")
+    monkeypatch.setattr(book, "MIRROR_DB", Path("/nonexistent_dir_xyz_12345/mirror.db"))
+
+    with pytest.raises(book.SchedulingError, match="mirror update failed"):
         book.book_new_appointment("PT-0001", 1, 1, datetime.now(), datetime.now() + timedelta(minutes=30), actor="test")

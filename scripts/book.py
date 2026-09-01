@@ -246,25 +246,50 @@ def book_new_appointment(
     actor: str = "unknown",
 ):
     """Creates a brand new appointment, as opposed to reschedule_appointment
-    which moves an existing one. Same known limitation as above regarding
-    the mirror/source writes not being one atomic transaction.
+    which moves an existing one.
 
-    The new id is computed as one past the max of BOTH databases, not
-    just the mirror, in case source has appointments not yet synced --
-    avoids a collision that a mirror-only max wouldn't catch."""
-    try:
-        mirror_conn = sqlite3.connect(MIRROR_DB)
-        mirror_max = mirror_conn.execute("SELECT COALESCE(MAX(id), 0) FROM appointments").fetchone()[0]
-        mirror_conn.close()
+    SOURCE_BACKEND="pervasive" writes to the real source FIRST (it
+    generates the real Visit ID), then mirrors that same id locally --
+    the reverse order from the sqlite path below. This is deliberate:
+    if the source insert succeeds but the mirror insert then fails, the
+    real appointment already exists in PracticeWorks and the next
+    sync_from_pervasive() will pick it up naturally -- a more forgiving
+    failure mode than reschedule's, which needs explicit reconciliation
+    if mirror and source disagree."""
+    if SOURCE_BACKEND == "pervasive":
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent / "source_system"))
+            from pervasive_odbc_source import write_new_appointment
+            new_id = write_new_appointment(source_patient_id, provider_id, start, end, appt_type)
+        except Exception as e:
+            log_access(actor, "book_new_appointment", patient_id=patient_id, success=False, detail=f"pervasive insert failed: {e}")
+            raise SchedulingError("could not book appointment") from e
+    else:
+        try:
+            mirror_conn = sqlite3.connect(MIRROR_DB)
+            mirror_max = mirror_conn.execute("SELECT COALESCE(MAX(id), 0) FROM appointments").fetchone()[0]
+            mirror_conn.close()
 
-        src_conn = sqlite3.connect(SOURCE_DB)
-        src_max = src_conn.execute("SELECT COALESCE(MAX(id), 0) FROM appointments").fetchone()[0]
-        src_conn.close()
+            src_conn = sqlite3.connect(SOURCE_DB)
+            src_max = src_conn.execute("SELECT COALESCE(MAX(id), 0) FROM appointments").fetchone()[0]
+            src_conn.close()
 
-        new_id = max(mirror_max, src_max) + 1
-    except sqlite3.Error as e:
-        log_access(actor, "book_new_appointment", patient_id=patient_id, success=False, detail=f"id generation failed: {e}")
-        raise SchedulingError("could not book appointment") from e
+            new_id = max(mirror_max, src_max) + 1
+        except sqlite3.Error as e:
+            log_access(actor, "book_new_appointment", patient_id=patient_id, success=False, detail=f"id generation failed: {e}")
+            raise SchedulingError("could not book appointment") from e
+
+        try:
+            src = sqlite3.connect(SOURCE_DB)
+            src.execute(
+                "INSERT INTO appointments VALUES (?, ?, ?, ?, ?, 'confirmed', ?)",
+                (new_id, source_patient_id, provider_id, start.isoformat(), end.isoformat(), appt_type),
+            )
+            src.commit()
+            src.close()
+        except sqlite3.Error as e:
+            log_access(actor, "book_new_appointment", patient_id=patient_id, success=False, detail=f"source insert failed: {e}")
+            raise SchedulingError("could not book appointment") from e
 
     try:
         mirror = sqlite3.connect(MIRROR_DB)
@@ -275,23 +300,11 @@ def book_new_appointment(
         mirror.commit()
         mirror.close()
     except sqlite3.Error as e:
-        log_access(actor, "book_new_appointment", patient_id=patient_id, success=False, detail=f"mirror insert failed: {e}")
-        raise SchedulingError("could not book appointment") from e
-
-    try:
-        src = sqlite3.connect(SOURCE_DB)
-        src.execute(
-            "INSERT INTO appointments VALUES (?, ?, ?, ?, ?, 'confirmed', ?)",
-            (new_id, source_patient_id, provider_id, start.isoformat(), end.isoformat(), appt_type),
-        )
-        src.commit()
-        src.close()
-    except sqlite3.Error as e:
         log_access(
             actor, "book_new_appointment", patient_id=patient_id, success=False,
-            detail=f"MIRROR INSERTED BUT SOURCE WRITE FAILED (out of sync until next reconciliation): {e}",
+            detail=f"SOURCE BOOKED BUT MIRROR INSERT FAILED (will self-heal on next sync): {e}",
         )
-        raise SchedulingError("appointment booked locally but the source system write failed") from e
+        raise SchedulingError("appointment booked in the source system but the local mirror update failed") from e
 
     log_access(actor, "book_new_appointment", patient_id=patient_id, detail=f"appointment {new_id} at {start.isoformat()}")
     return new_id

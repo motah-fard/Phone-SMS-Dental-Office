@@ -182,12 +182,7 @@ def read_appointments_normalized():
     return result
 
 
-# --- Writes: start with reschedule (UPDATE an existing row) only.
-# Deliberately NOT building "create a new appointment" (INSERT) yet --
-# that needs real-world confirmation of how Visit ID and other
-# required fields (Resource ID, Tx class ID, etc.) get assigned, which
-# hasn't been investigated. Updating a known existing row is much
-# lower-risk than guessing at insert requirements. ---
+# --- Writes ---
 
 def write_reschedule(visit_id, new_start, new_end):
     """Moves an EXISTING appointment (identified by its real Visit ID)
@@ -203,6 +198,55 @@ def write_reschedule(visit_id, new_start, new_end):
     )
     conn.commit()
     conn.close()
+
+
+def _next_visit_id(cur) -> int:
+    """Visit ID isn't confirmed to auto-increment (Btrieve-derived
+    tables often don't), so this generates one the same way the fake
+    SQLite path does: one past the current real max. This has a
+    theoretical race condition if PracticeWorks itself or another user
+    creates an appointment between this read and the insert below --
+    acceptable for a single small office's low-concurrency use, but a
+    real known limitation, not something silently assumed safe."""
+    cur.execute('SELECT COALESCE(MAX("Visit ID"), 0) FROM "Appointments"')
+    return cur.fetchone()[0] + 1
+
+
+def write_new_appointment(patient_id: int, provider_id: int, start, end, description: str = "New Appointment", resource_id: int | None = None) -> int:
+    """Creates a brand-new appointment. UNVERIFIED against real
+    PracticeWorks as of writing -- test against TUTOR first (see
+    scripts/demo_tutor_new_booking_test.py) before trusting this.
+
+    Only sets the columns this project actually understands the meaning
+    of (see docs/practiceworks_schema_notes.md); everything else in the
+    41-column real schema is left to whatever default the table itself
+    applies to an omitted column. If that fails with a NOT NULL/
+    constraint error, that error will name exactly which additional
+    column needs a value -- fix forward from real feedback, don't
+    guess all 41 columns up front.
+
+    `resource_id` (which chair) isn't tracked anywhere else in this
+    project (only which Dr, not which chair) -- defaults to matching
+    provider_id as a placeholder. Confirm with the practice whether
+    that assumption is actually reasonable once this is live."""
+    conn = get_connection()
+    cur = conn.cursor()
+    visit_id = _next_visit_id(cur)
+    if resource_id is None:
+        resource_id = provider_id
+
+    cur.execute(
+        """
+        INSERT INTO "Appointments"
+            ("Visit ID", "Date", "Start time", "End time", "Resource ID", "Dr ID", "Patient ID",
+             "Description", "Status", "Cancel status")
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+        """,
+        (visit_id, start.date(), start.time(), end.time(), resource_id, provider_id, patient_id, description),
+    )
+    conn.commit()
+    conn.close()
+    return visit_id
 
 
 if __name__ == "__main__":

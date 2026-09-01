@@ -7,20 +7,22 @@ gate before go-live. Update this file as items get done or new ones
 surface; it's meant to stay current, not be a one-time snapshot.
 
 ## PracticeWorks integration
-- [ ] Get real column names for `Patient File` and `Appointments` from
-      the TUTOR (training) database.
-- [ ] Confirm the ODBC DSN name/connection details for a real (non-TUTOR)
-      connection, once ready to test read-only against `PWORKS`.
-- [ ] Test read-only against `PWORKS` before ever allowing a write.
-- [ ] Confirm the write-back mechanism (ODBC write vs. some other
-      PracticeWorks-specific API) actually works safely — test against
-      a throwaway dummy patient/appointment the practice creates
-      specifically for this, never a real patient's real slot.
+- [x] Get real column names for `Patient File`, `Person file`, and
+      `Appointments` from the TUTOR (training) database.
+- [x] Confirm the ODBC DSN — `Tutor_DSN`, Pervasive ODBC Client
+      Interface driver, confirmed working (32-bit Python required).
+- [x] Read-only sync against TUTOR proven working end to end (875 real
+      identities, 242 real appointments, correctly pseudonymized).
+- [x] Reschedule write-back (UPDATE) proven working against TUTOR,
+      confirmed via an independent fresh re-sync.
+- [x] New-appointment write-back (INSERT) built — **not yet confirmed
+      against TUTOR**, run `scripts/demo_tutor_new_booking_test.py` and
+      report the result before checking this off for real.
+- [ ] See `docs/pwors_cutover_plan.md` for everything still needed
+      before pointing this at the real `PWORKS` database.
 
 ## Vendor agreements (BAAs)
-- [ ] Telnyx BAA signed (telephony + SMS + voice AI bundle).
-- [ ] Anthropic BAA signed (LLM) — requires the org's Primary Owner to
-      activate it, then contact Anthropic sales.
+- [x] BAA(s) in place (per practice confirmation).
 - [ ] Confirm which of the two caller-ID branding options (see
       `docs/caller_id_branding.md`) you're using, and set it up once a
       real Telnyx number exists.

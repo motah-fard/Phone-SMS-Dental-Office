@@ -23,6 +23,7 @@ omit = [
     # anything, nothing here to unit-test in isolation.
     "*/demo_tutor.py",
     "*/demo_tutor_write_test.py",
+    "*/demo_tutor_new_booking_test.py",
 ]
 
 [tool.coverage.report]
