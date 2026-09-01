@@ -75,6 +75,20 @@ def read_providers():
     return columns, rows
 
 
+def read_person_file():
+    """'Patient File' has no phone or date-of-birth column -- those
+    live on the generic 'Person file' table instead, joined by
+    Person ID. Confirmed by reading Patient File's actual column list
+    (see docs/practiceworks_schema_notes.md)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM "Person file"')
+    columns = [c[0] for c in cur.description]
+    rows = cur.fetchall()
+    conn.close()
+    return columns, rows
+
+
 def read_work_hours():
     """TODO: confirm 'Open Close Times' schema -- expected to hold
     provider or practice working hours."""
@@ -88,13 +102,20 @@ def read_work_hours():
 
 
 if __name__ == "__main__":
-    # Quick manual check once DSN_NAME is filled in: print column names
-    # only, don't dump real rows here even against TUTOR out of habit.
+    # Column names are already confirmed real -- now printing a couple
+    # of SAMPLE ROWS too, safe since this is TUTOR's fake training data,
+    # to learn actual date/time formats before writing the real sync
+    # mapping (e.g. is "Start time" a full datetime, a bare time, or a
+    # minutes-since-midnight integer?).
     for label, fn in [
         ("Patient File", read_patients),
+        ("Person file", read_person_file),
         ("Appointments", read_appointments),
         ("Employee list", read_providers),
         ("Open Close Times", read_work_hours),
     ]:
         columns, rows = fn()
-        print(f"{label}: {len(rows)} rows, columns = {columns}")
+        print(f"\n=== {label}: {len(rows)} rows ===")
+        print(f"columns = {columns}")
+        for row in rows[:2]:
+            print(f"sample row: {list(row)}")
