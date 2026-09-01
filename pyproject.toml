@@ -10,11 +10,18 @@ source = [
     "integrations",
 ]
 omit = [
-    # Can't import pyodbc at all without a native ODBC driver manager
-    # installed (unixODBC/iODBC) -- this module is an intentional stub
-    # anyway, pending the real Pervasive DSN from the office server (see
-    # docs/practiceworks_schema_notes.md). Nothing to unit-test here yet.
+    # This is now the real PracticeWorks connector (queries confirmed
+    # against the live TUTOR database), but it still can't be imported
+    # here -- pyodbc needs a native ODBC driver manager (unixODBC/iODBC)
+    # that only exists on the actual PracticeWorks-connected Windows
+    # machine, not this dev environment. Its logic is covered indirectly
+    # via test_sync_from_pervasive.py, which fakes this module's
+    # functions rather than importing the real (pyodbc-dependent) file.
     "*/pervasive_odbc_source.py",
+    # Manual verification script -- run for real on the Windows machine
+    # (see its own docstring), needs a live ODBC connection to mean
+    # anything, nothing here to unit-test in isolation.
+    "*/demo_tutor.py",
 ]
 
 [tool.coverage.report]

@@ -106,5 +106,91 @@ def sync():
     print("Sync complete: source -> mirror + identity_lookup")
 
 
+def sync_from_pervasive():
+    """Same end result as sync() -- populates mirror.db and
+    identity_lookup.db -- but reads from the real PracticeWorks
+    database (via source_system/pervasive_odbc_source.py) instead of
+    the fake SQLite simulation.
+
+    Kept as a separate function rather than unifying with sync(): the
+    query mechanics genuinely differ (real SQL against the Pervasive
+    driver vs. plain SQLite), and duplicating this straightforward loop
+    is a better trade than forcing a shared code path -- it also means
+    the fake-data path (and its full test suite) is never at risk from
+    changes made while getting the real connector working.
+
+    pervasive_odbc_source is imported here, not at module level, since
+    it requires pyodbc + a real ODBC driver that won't exist on most
+    machines (including wherever the test suite runs) -- importing it
+    lazily means sync() and the rest of this module still work fine
+    without pyodbc installed at all.
+    """
+    sys.path.insert(0, str(Path(__file__).parent.parent / "source_system"))
+    from pervasive_odbc_source import (
+        read_patients_normalized, read_providers_normalized, read_appointments_normalized,
+    )
+
+    mirror = lookup = None
+    try:
+        mirror = sqlite3.connect(MIRROR_DB)
+        lookup = sqlite3.connect(LOOKUP_DB)
+        mirror_cur = mirror.cursor()
+        lookup_cur = lookup.cursor()
+
+        # --- providers: not PHI, copy straight across ---
+        mirror_cur.execute("DELETE FROM providers")
+        for row in read_providers_normalized():
+            mirror_cur.execute("INSERT INTO providers VALUES (?, ?, ?, ?)", row)
+
+        # --- patients: assign/reuse pseudonymous patient_id ---
+        source_to_pseudo = {}
+        for row in lookup_cur.execute("SELECT patient_id, source_patient_id FROM identity_map"):
+            source_to_pseudo[row[1]] = row[0]
+
+        new_identities = 0
+        for src_id, first, last, dob, phone in read_patients_normalized():
+            if src_id not in source_to_pseudo:
+                pid = next_patient_id(lookup_cur)
+                lookup_cur.execute(
+                    "INSERT INTO identity_map VALUES (?, ?, ?, ?, ?, ?)",
+                    (pid, src_id, first, last, phone, dob),
+                )
+                source_to_pseudo[src_id] = pid
+                new_identities += 1
+
+        lookup.commit()
+
+        # --- appointments: map to pseudonymous patient_id, no PHI carried over ---
+        mirror_cur.execute("DELETE FROM appointments")
+        synced_appointments = 0
+        for appt_id, src_patient_id, provider_id, start, end, status, appt_type in read_appointments_normalized():
+            if src_patient_id not in source_to_pseudo:
+                log_access("sync_job", "sync_from_pervasive", success=False,
+                           detail=f"appointment {appt_id} references unknown patient {src_patient_id}, skipped")
+                continue
+            pseudo_id = source_to_pseudo[src_patient_id]
+            mirror_cur.execute(
+                "INSERT INTO appointments VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (appt_id, pseudo_id, provider_id, start, end, status, appt_type),
+            )
+            synced_appointments += 1
+
+        mirror.commit()
+
+    except Exception as e:
+        log_access("sync_job", "sync_from_pervasive", success=False, detail=f"sync failed: {e}")
+        raise SyncError(f"sync failed: {e}") from e
+    finally:
+        for conn in (mirror, lookup):
+            if conn is not None:
+                conn.close()
+
+    log_access(
+        "sync_job", "sync_from_pervasive",
+        detail=f"{new_identities} new identity mapping(s), {synced_appointments} appointment(s) synced",
+    )
+    print("Sync complete: PracticeWorks (Pervasive/TUTOR) -> mirror + identity_lookup")
+
+
 if __name__ == "__main__":
     sync()
