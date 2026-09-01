@@ -66,39 +66,10 @@ from book import (
 )
 from availability import get_open_slots, find_soonest_slots_any_provider, AvailabilityError
 from business_hours import is_staffed, next_staffed_description
+import conversation_store
+import rollout_stage
 
 app = Flask(__name__)
-
-# phone -> {"state": {...}, "last_touched": epoch_seconds}. In-memory
-# demo only -- swap for a real table before going live (see
-# pre_launch_checklist.md), but even a real table should keep this same
-# TTL/expiry behavior: an abandoned conversation shouldn't be retained
-# forever just because the patient never finished it.
-_conversation_state: dict[str, dict] = {}
-CONVERSATION_STATE_TTL_SECONDS = 30 * 60  # 30 min of inactivity -- long enough for a real back-and-forth text exchange, short enough not to accumulate indefinitely
-
-
-def _sweep_expired_conversation_state():
-    now = time.time()
-    expired = [
-        phone for phone, entry in _conversation_state.items()
-        if now - entry["last_touched"] > CONVERSATION_STATE_TTL_SECONDS
-    ]
-    for phone in expired:
-        del _conversation_state[phone]
-
-
-def _get_conversation_state(phone: str) -> dict:
-    """Lazily sweeps expired entries on every access -- no background
-    thread needed at this scale, and it means memory never grows purely
-    from time passing, only from genuinely active conversations."""
-    _sweep_expired_conversation_state()
-    entry = _conversation_state.get(phone)
-    return entry["state"] if entry else {}
-
-
-def _set_conversation_state(phone: str, state: dict):
-    _conversation_state[phone] = {"state": state, "last_touched": time.time()}
 
 
 @app.errorhandler(KeyError)
@@ -171,12 +142,12 @@ def telnyx_sms_webhook():
     from_phone = payload["from"]["phone_number"]
     text = payload["text"]
 
-    state = _get_conversation_state(from_phone)
+    state = conversation_store.get_state(from_phone)
     # handle_inbound_sms never raises (it catches its own backend errors
     # and returns a calm apology message instead) -- so no try/except
     # needed here for that. Sending the reply is a separate failure mode.
     reply, new_state = handle_inbound_sms(from_phone, text, state)
-    _set_conversation_state(from_phone, new_state)
+    conversation_store.set_state(from_phone, new_state)
 
     try:
         send_sms(from_phone, reply)
@@ -262,6 +233,8 @@ def tool_find_new_appointment_slots():
     to) -- finds the soonest availability across any provider, starting
     tomorrow. Requires verification first, same as the other tools that
     touch patient-specific booking."""
+    if not rollout_stage.is_enabled("booking"):
+        return jsonify({"error": "booking new appointments isn't available yet", "disabled": True}), 403
     phone = request.json["phone"]
     dob = parse_dob(request.json["dob"])
     if dob is None:
@@ -281,6 +254,8 @@ def tool_find_new_appointment_slots():
 @app.route("/tools/book_new_appointment", methods=["POST"])
 @require_tools_secret
 def tool_book_new_appointment():
+    if not rollout_stage.is_enabled("booking"):
+        return jsonify({"error": "booking new appointments isn't available yet", "disabled": True}), 403
     body = request.json
     phone = body["phone"]
     dob = parse_dob(body["dob"])
@@ -303,6 +278,8 @@ def tool_book_new_appointment():
 @app.route("/tools/reschedule_appointment", methods=["POST"])
 @require_tools_secret
 def tool_reschedule_appointment():
+    if not rollout_stage.is_enabled("reschedule"):
+        return jsonify({"error": "rescheduling isn't available yet", "disabled": True}), 403
     body = request.json
     phone = body["phone"]
     dob = parse_dob(body["dob"])

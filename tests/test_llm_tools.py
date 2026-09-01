@@ -5,6 +5,25 @@ from datetime import datetime, timedelta
 import llm_tools as lt
 
 
+def test_reschedule_tool_blocked_when_stage_is_confirmations_only(fresh_db, monkeypatch):
+    monkeypatch.setattr(lt.rollout_stage, "ROLLOUT_STAGE", "confirmations_only")
+    result = lt.execute_tool(
+        "reschedule_appointment", {"appointment_id": 1, "new_start": "2026-09-01T09:00:00", "new_end": "2026-09-01T09:30:00"},
+        "+15551230001", {"verified_patient": {"patient_id": "PT-0001", "source_patient_id": 1}},
+    )
+    assert "error" in result
+
+
+def test_booking_tools_blocked_unless_stage_is_full(fresh_db, monkeypatch):
+    monkeypatch.setattr(lt.rollout_stage, "ROLLOUT_STAGE", "reschedule")
+    session = {"verified_patient": {"patient_id": "PT-0003", "source_patient_id": 3}}
+    assert "error" in lt.execute_tool("find_new_appointment_slots", {}, "+15551230003", session)
+    assert "error" in lt.execute_tool(
+        "book_new_appointment", {"provider_id": 1, "new_start": "2026-09-01T09:00:00", "new_end": "2026-09-01T09:30:00"},
+        "+15551230003", session,
+    )
+
+
 def test_verify_patient_tool_success_populates_session(fresh_db):
     session = {}
     result = lt.execute_tool("verify_patient", {"dob": "04/12/1988"}, "+15551230001", session)

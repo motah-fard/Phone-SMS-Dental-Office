@@ -38,6 +38,22 @@ def test_yes_nothing_to_confirm_when_no_appointments(fresh_db):
     assert "nothing on the books" in reply.lower()
 
 
+# --- Rollout stage gate (checked before verification even starts) ---
+
+def test_reschedule_blocked_when_stage_is_confirmations_only(fresh_db, monkeypatch):
+    monkeypatch.setattr(sc.rollout_stage, "ROLLOUT_STAGE", "confirmations_only")
+    reply, state = sc.handle_inbound_sms("+15551230001", "RESCHEDULE", {})
+    assert "date of birth" not in reply.lower()  # never even gets to asking
+    assert "pending_verification_for" not in state
+
+
+def test_book_blocked_unless_stage_is_full(fresh_db, monkeypatch):
+    monkeypatch.setattr(sc.rollout_stage, "ROLLOUT_STAGE", "reschedule")
+    reply, state = sc.handle_inbound_sms("+15551230003", "BOOK", {})
+    assert "date of birth" not in reply.lower()
+    assert "pending_verification_for" not in state
+
+
 # --- RESCHEDULE: requires verification first ---
 
 def test_reschedule_first_message_asks_for_dob(fresh_db):

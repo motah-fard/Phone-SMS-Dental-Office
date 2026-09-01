@@ -24,6 +24,7 @@ from book import (
 )
 from availability import get_open_slots, find_soonest_slots_any_provider, AvailabilityError
 from business_hours import is_staffed, next_staffed_description
+import rollout_stage
 
 TOOL_DEFINITIONS = [
     {
@@ -120,6 +121,8 @@ def execute_tool(name: str, tool_input: dict, phone: str, session: dict) -> dict
             return {"slots": [{"start": s.isoformat(), "end": e.isoformat()} for s, e in slots]}
 
         if name == "reschedule_appointment":
+            if not rollout_stage.is_enabled("reschedule"):
+                return {"error": "rescheduling isn't available yet -- tell the patient our front-desk team will follow up directly"}
             if not patient:
                 return {"error": "not verified yet -- call verify_patient first"}
             reschedule_appointment(
@@ -132,6 +135,8 @@ def execute_tool(name: str, tool_input: dict, phone: str, session: dict) -> dict
             return {"status": "rescheduled"}
 
         if name == "find_new_appointment_slots":
+            if not rollout_stage.is_enabled("booking"):
+                return {"error": "booking new appointments isn't available yet -- tell the patient our front-desk team will follow up directly"}
             if not patient:
                 return {"error": "not verified yet -- call verify_patient first"}
             provider, slots = find_soonest_slots_any_provider(datetime.now() + timedelta(days=1))
@@ -140,6 +145,8 @@ def execute_tool(name: str, tool_input: dict, phone: str, session: dict) -> dict
             return {"provider": provider, "slots": [{"start": s.isoformat(), "end": e.isoformat()} for s, e in slots]}
 
         if name == "book_new_appointment":
+            if not rollout_stage.is_enabled("booking"):
+                return {"error": "booking new appointments isn't available yet -- tell the patient our front-desk team will follow up directly"}
             if not patient:
                 return {"error": "not verified yet -- call verify_patient first"}
             new_id = book_new_appointment(

@@ -106,6 +106,16 @@ def fully_booked_that_day(provider_name: str, next_available: str) -> str:
     )
 
 
+def capability_not_yet_enabled(next_available: str) -> str:
+    """Shown when ROLLOUT_STAGE hasn't turned this capability on yet --
+    never mention rollout stages or internal system state to a patient,
+    just route them to a human warmly, same as any other escalation."""
+    return (
+        f"I'm not able to take care of that myself just yet — I'll have our front "
+        f"desk team reach out {next_available} to help you directly."
+    )
+
+
 def system_trouble(next_available: str) -> str:
     """Shown when a database/system error happens mid-conversation --
     never expose the raw error to a patient, just a calm apology and a

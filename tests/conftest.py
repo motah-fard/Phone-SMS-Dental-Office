@@ -18,18 +18,22 @@ from init_source_db import init_db as init_source_db  # noqa: E402
 from init_mirror_db import init_mirror_db, init_lookup_db  # noqa: E402
 import sync as sync_module  # noqa: E402
 from audit_log import AUDIT_DB  # noqa: E402
+from conversation_store import STATE_DB  # noqa: E402
 
 
 @pytest.fixture
 def fresh_db():
     """Rebuilds source + mirror + identity_lookup from scratch and syncs
-    them, then clears the audit log -- the same sequence scripts/demo.py
-    runs, reused here so tests and the manual demo never drift apart.
-    Function-scoped: every test gets a clean, known dataset."""
+    them, then clears the audit log and conversation-state store -- the
+    same sequence scripts/demo.py runs, reused here so tests and the
+    manual demo never drift apart. Function-scoped: every test gets a
+    clean, known dataset."""
     init_source_db()
     init_mirror_db()
     init_lookup_db()
     sync_module.sync()
     if AUDIT_DB.exists():
         AUDIT_DB.unlink()
+    if STATE_DB.exists():
+        STATE_DB.unlink()
     yield

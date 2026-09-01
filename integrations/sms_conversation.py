@@ -43,6 +43,7 @@ from book import (
 )
 from availability import find_soonest_slots, find_soonest_slots_any_provider, AvailabilityError
 from business_hours import next_staffed_description
+import rollout_stage
 import sms_templates as t
 
 # Which LLM handles open-ended replies -- set LLM_PROVIDER=openai in .env
@@ -153,7 +154,11 @@ def _handle_inbound_sms_unsafe(from_phone: str, text: str, state: dict) -> tuple
 
     # Patient wants to reschedule -- re-discloses appointment details and
     # leads to a write, so verify identity first (once per conversation).
+    # Checked before verification, not after: no point asking for a DOB
+    # for a capability that's not even turned on yet at this rollout stage.
     if "RESCHEDULE" in text_clean:
+        if not rollout_stage.is_enabled("reschedule"):
+            return t.capability_not_yet_enabled(next_staffed_description()), state
         if state.get("verified_patient"):
             return _offer_reschedule_slots(state["verified_patient"], state)
         state["pending_verification_for"] = "reschedule"
@@ -161,6 +166,8 @@ def _handle_inbound_sms_unsafe(from_phone: str, text: str, state: dict) -> tuple
 
     # Patient wants a brand-new appointment -- same verification policy.
     if "BOOK" in text_clean or "APPOINTMENT" in text_clean or "NEW" in text_clean:
+        if not rollout_stage.is_enabled("booking"):
+            return t.capability_not_yet_enabled(next_staffed_description()), state
         if state.get("verified_patient"):
             return _offer_new_appointment_slots(state["verified_patient"], state)
         state["pending_verification_for"] = "book"
