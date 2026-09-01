@@ -18,10 +18,11 @@ omit = [
     # via test_sync_from_pervasive.py, which fakes this module's
     # functions rather than importing the real (pyodbc-dependent) file.
     "*/pervasive_odbc_source.py",
-    # Manual verification script -- run for real on the Windows machine
-    # (see its own docstring), needs a live ODBC connection to mean
+    # Manual verification scripts -- run for real on the Windows machine
+    # (see their own docstrings), need a live ODBC connection to mean
     # anything, nothing here to unit-test in isolation.
     "*/demo_tutor.py",
+    "*/demo_tutor_write_test.py",
 ]
 
 [tool.coverage.report]
