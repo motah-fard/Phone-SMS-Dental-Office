@@ -4,3 +4,4 @@ pyodbc
 pynacl
 anthropic
 openai
+tzdata  # required on Windows -- zoneinfo has no timezone data of its own there (Mac/Linux ship it at the OS level)
