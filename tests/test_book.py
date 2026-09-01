@@ -79,6 +79,22 @@ def test_get_upcoming_appointments_unknown_patient_returns_empty(fresh_db):
     assert book.get_upcoming_appointments("PT-9999", actor="test") == []
 
 
+def test_get_upcoming_appointments_excludes_past_appointments(fresh_db):
+    """Regression test: found via real PracticeWorks TUTOR data, which
+    (unlike our own fake seed data) includes years of appointment
+    history -- a 2015-dated visit must never show up as 'upcoming'."""
+    import sqlite3
+    conn = sqlite3.connect(book.MIRROR_DB)
+    conn.execute(
+        "UPDATE appointments SET start_time = '2015-01-05T10:30:00', end_time = '2015-01-05T11:00:00' "
+        "WHERE patient_id = 'PT-0001'"
+    )
+    conn.commit()
+    conn.close()
+
+    assert book.get_upcoming_appointments("PT-0001", actor="test") == []
+
+
 def test_reschedule_appointment_updates_mirror_and_source(fresh_db):
     patient = book.resolve_patient_by_phone("+15551230001", actor="test")
     appt = book.get_upcoming_appointments(patient["patient_id"], actor="test")[0]

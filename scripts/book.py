@@ -118,17 +118,24 @@ def parse_dob(text: str) -> str | None:
 
 
 def get_upcoming_appointments(patient_id: str, actor: str = "unknown"):
+    """Only truly future appointments -- this never mattered against
+    our own fake seed data (always constructed as "today + a few days"),
+    but real PracticeWorks data includes years of appointment HISTORY,
+    and a patient's most recent past visit would otherwise sort in
+    right alongside anything actually upcoming. ISO 8601 strings compare
+    correctly as plain strings, so no datetime parsing needed here."""
     try:
+        now_iso = datetime.now().isoformat()
         conn = sqlite3.connect(MIRROR_DB)
         cur = conn.cursor()
         cur.execute(
             """
             SELECT a.id, a.provider_id, p.name, a.start_time, a.end_time, a.status, a.appt_type
             FROM appointments a JOIN providers p ON p.id = a.provider_id
-            WHERE a.patient_id = ? AND a.status != 'cancelled'
+            WHERE a.patient_id = ? AND a.status != 'cancelled' AND a.start_time >= ?
             ORDER BY a.start_time
             """,
-            (patient_id,),
+            (patient_id, now_iso),
         )
         rows = cur.fetchall()
         conn.close()
