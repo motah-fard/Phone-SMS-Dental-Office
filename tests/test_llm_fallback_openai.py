@@ -10,15 +10,17 @@ import json
 from types import SimpleNamespace
 
 from llm_fallback_openai import handle_open_ended
+import audit_log
 
 
 def fake_tool_call(name, arguments: dict, call_id):
     return SimpleNamespace(id=call_id, function=SimpleNamespace(name=name, arguments=json.dumps(arguments)))
 
 
-def fake_response(content, tool_calls=None):
+def fake_response(content, tool_calls=None, prompt_tokens=100, completion_tokens=20):
     message = SimpleNamespace(content=content, tool_calls=tool_calls)
-    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+    usage = SimpleNamespace(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
 
 
 class FakeClient:
@@ -98,3 +100,25 @@ def test_history_is_capped_on_a_long_running_thread(fresh_db):
     _, state = handle_open_ended("+15551230001", "one more", state, client=client)
 
     assert len(state["llm_history"]) <= MAX_HISTORY_MESSAGES + 1
+
+
+def test_logs_latency_and_estimated_cost_per_api_call(fresh_db):
+    script = [
+        fake_response(None, [fake_tool_call("verify_patient", {"dob": "04/12/1988"}, "call_1")],
+                      prompt_tokens=500, completion_tokens=30),
+        fake_response("You're all set!", prompt_tokens=650, completion_tokens=15),
+    ]
+    client = FakeClient(script)
+
+    handle_open_ended("+15551230001", "verify me", {}, client=client)
+
+    rows = audit_log.read_recent_llm_calls(limit=10)
+    assert len(rows) == 2
+    timestamp, actor, provider, model, latency_ms, input_tokens, output_tokens, cost = rows[0]
+    assert actor == "sms_llm_fallback"
+    assert provider == "openai"
+    assert model == "gpt-5-nano"
+    assert latency_ms >= 0
+    assert input_tokens == 650 and output_tokens == 15
+    # 650 * 0.05/1e6 + 15 * 0.40/1e6 = 0.0000325 + 0.000006 = 0.0000385
+    assert abs(cost - 0.0000385) < 1e-9

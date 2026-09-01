@@ -68,3 +68,66 @@ def read_recent(limit: int = 50):
     rows = cur.fetchall()
     conn.close()
     return rows
+
+
+# --- LLM call metrics: latency and estimated cost per request. Kept as
+# a separate table (not extra columns on access_log) since "who touched
+# what patient's data" and "how long/much did this API call cost" are
+# different concerns, even living in the same file for convenience --
+# every other log_access() caller and every existing test that unpacks
+# its 6-column shape stays untouched. ---
+
+def _ensure_metrics_table(conn: sqlite3.Connection):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_call_metrics (
+            id INTEGER PRIMARY KEY,
+            timestamp TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            latency_ms REAL NOT NULL,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            estimated_cost_usd REAL
+        )
+        """
+    )
+
+
+def log_llm_call(
+    actor: str, provider: str, model: str, latency_ms: float,
+    input_tokens: int | None = None, output_tokens: int | None = None,
+    estimated_cost_usd: float | None = None,
+):
+    """One row per actual API call (not per conversation turn -- a
+    single reply can involve several tool-calling round trips, and each
+    one has its own real latency and token cost worth seeing separately)."""
+    conn = sqlite3.connect(AUDIT_DB)
+    _ensure_metrics_table(conn)
+    conn.execute(
+        """
+        INSERT INTO llm_call_metrics
+            (timestamp, actor, provider, model, latency_ms, input_tokens, output_tokens, estimated_cost_usd)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now(timezone.utc).isoformat(), actor, provider, model,
+            latency_ms, input_tokens, output_tokens, estimated_cost_usd,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def read_recent_llm_calls(limit: int = 50):
+    conn = sqlite3.connect(AUDIT_DB)
+    _ensure_metrics_table(conn)
+    cur = conn.execute(
+        "SELECT timestamp, actor, provider, model, latency_ms, input_tokens, output_tokens, estimated_cost_usd "
+        "FROM llm_call_metrics ORDER BY id DESC LIMIT ?",
+        (limit,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows

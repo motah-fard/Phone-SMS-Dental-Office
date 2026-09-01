@@ -12,6 +12,7 @@ Run: pytest tests/test_llm_fallback.py
 from types import SimpleNamespace
 
 from llm_fallback import handle_open_ended
+import audit_log
 
 
 class FakeTextBlock:
@@ -31,9 +32,13 @@ class FakeToolUseBlock:
 
 
 class FakeResponse:
-    def __init__(self, stop_reason, content):
+    def __init__(self, stop_reason, content, input_tokens=100, output_tokens=20):
         self.stop_reason = stop_reason
         self.content = content
+        # Real Anthropic responses always carry usage -- default to a
+        # realistic value so every test exercises the cost/latency
+        # logging path, not just the ones that check it explicitly.
+        self.usage = SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens)
 
 
 class FakeClient:
@@ -131,3 +136,29 @@ def test_history_is_capped_on_a_long_running_thread(fresh_db):
     _, state = handle_open_ended("+15551230001", "one more", state, client=client)
 
     assert len(state["llm_history"]) <= MAX_HISTORY_MESSAGES + 1
+
+
+def test_logs_latency_and_estimated_cost_per_api_call(fresh_db):
+    """Two tool turns + a final answer = 3 real API calls -- each one
+    must get its own metrics row, not one aggregated row per conversation."""
+    script = [
+        FakeResponse("tool_use", [FakeToolUseBlock("verify_patient", {"dob": "04/12/1988"}, "call_1")],
+                     input_tokens=500, output_tokens=30),
+        FakeResponse("tool_use", [FakeToolUseBlock("get_upcoming_appointments", {}, "call_2")],
+                     input_tokens=600, output_tokens=25),
+        FakeResponse("end_turn", [FakeTextBlock("You're all set!")], input_tokens=650, output_tokens=15),
+    ]
+    client = FakeClient(script)
+
+    handle_open_ended("+15551230001", "what's my next appointment?", {}, client=client)
+
+    rows = audit_log.read_recent_llm_calls(limit=10)
+    assert len(rows) == 3
+    timestamp, actor, provider, model, latency_ms, input_tokens, output_tokens, cost = rows[0]
+    assert actor == "sms_llm_fallback"
+    assert provider == "anthropic"
+    assert model == "claude-sonnet-5"
+    assert latency_ms >= 0
+    assert input_tokens == 650 and output_tokens == 15
+    # 650 * 2/1e6 + 15 * 10/1e6 = 0.0013 + 0.00015 = 0.00145
+    assert abs(cost - 0.00145) < 1e-9

@@ -27,5 +27,9 @@ omit = [
 
 [tool.coverage.report]
 exclude_lines = [
+    # Setting this option replaces coverage.py's built-in default list
+    # rather than adding to it -- "pragma: no cover" has to be re-listed
+    # explicitly or it silently stops working.
+    "pragma: no cover",
     "if __name__ == .__main__.:",
 ]

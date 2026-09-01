@@ -22,6 +22,16 @@ def client():
     return ws.app.test_client()
 
 
+@pytest.fixture(autouse=True)
+def clear_conversation_state():
+    """_conversation_state is a module-level global -- without this,
+    leftover state from one test could bleed into the next since they
+    all use similar test phone numbers."""
+    ws._conversation_state.clear()
+    yield
+    ws._conversation_state.clear()
+
+
 @pytest.fixture
 def signing_keypair(monkeypatch):
     signing_key = SigningKey.generate()
@@ -366,3 +376,58 @@ def test_scheduling_error_returns_503_not_leaking_details(client, fresh_db, monk
     )
     assert resp.status_code == 503
     assert "simulated db outage detail" not in resp.get_data(as_text=True)
+
+
+# --- Conversation state TTL/expiry (memory shouldn't grow forever) ---
+
+def test_conversation_state_persists_within_ttl():
+    ws._set_conversation_state("+15551230001", {"some_key": "some_value"})
+    assert ws._get_conversation_state("+15551230001") == {"some_key": "some_value"}
+
+
+def test_conversation_state_missing_phone_returns_empty_dict():
+    assert ws._get_conversation_state("+19995550000") == {}
+
+
+def test_conversation_state_expires_after_ttl(monkeypatch):
+    ws._set_conversation_state("+15551230001", {"some_key": "some_value"})
+    # Simulate time passing without actually sleeping.
+    ws._conversation_state["+15551230001"]["last_touched"] -= ws.CONVERSATION_STATE_TTL_SECONDS + 1
+
+    assert ws._get_conversation_state("+15551230001") == {}
+    assert "+15551230001" not in ws._conversation_state  # actually swept, not just ignored
+
+
+def test_sweep_does_not_remove_fresh_entries():
+    ws._set_conversation_state("+15551230001", {"a": 1})
+    ws._set_conversation_state("+15551230002", {"b": 2})
+    ws._conversation_state["+15551230001"]["last_touched"] -= ws.CONVERSATION_STATE_TTL_SECONDS + 1
+    # "+15551230002" stays fresh
+
+    ws._sweep_expired_conversation_state()
+
+    assert "+15551230001" not in ws._conversation_state
+    assert ws._conversation_state["+15551230002"]["state"] == {"b": 2}
+
+
+def test_sms_webhook_reuses_state_across_calls_same_phone(client, signing_keypair, fresh_db, monkeypatch):
+    """The verified_patient from RESCHEDULE's DOB check should still be
+    there on the very next text from the same number, proving state
+    actually round-trips through the webhook, not just the unit-level
+    helpers above."""
+    monkeypatch.setattr(ws, "send_sms", lambda phone, text: None)
+
+    def post_sms(text):
+        body = json.dumps({"data": {"payload": {"from": {"phone_number": "+15551230001"}, "text": text}}}).encode()
+        timestamp = str(int(time.time()))
+        signature = sign(signing_keypair, timestamp, body)
+        return client.post(
+            "/webhooks/telnyx/sms", data=body, content_type="application/json",
+            headers={"telnyx-signature-ed25519": signature, "telnyx-timestamp": timestamp},
+        )
+
+    post_sms("RESCHEDULE")
+    assert ws._conversation_state["+15551230001"]["state"]["pending_verification_for"] == "reschedule"
+
+    post_sms("04/12/1988")
+    assert "verified_patient" in ws._conversation_state["+15551230001"]["state"]

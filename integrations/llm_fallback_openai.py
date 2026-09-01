@@ -13,21 +13,40 @@ API endpoints once it's in place (see docs/pre_launch_checklist.md).
 MODEL below is a budget-tier choice for a small practice's call volume
 -- verify it's still current in OpenAI's model list before relying on
 it long-term; model names/tiers shift over time.
+
+Retries: not implemented here on purpose, same reasoning as
+llm_fallback.py -- the OpenAI SDK already retries transient failures
+internally by default.
 """
 import json
+import sys
+import time
+from pathlib import Path
 
 import openai
 
+sys.path.insert(0, str(Path(__file__).parent.parent / "mirror_system"))
+
 from llm_tools import TOOL_DEFINITIONS, execute_tool, system_prompt, SMS_ADAPTATION
+from audit_log import log_llm_call
 
 MODEL = "gpt-5-nano"
 MAX_TOOL_ITERATIONS = 5
 MAX_HISTORY_MESSAGES = 20
 
+# $/million tokens, gpt-5-nano -- verify against openai.com/api/pricing
+# before trusting this for real financial reporting; prices change.
+PRICE_PER_M_INPUT_TOKENS = 0.05
+PRICE_PER_M_OUTPUT_TOKENS = 0.40
+
 TOOLS = [
     {"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}}
     for t in TOOL_DEFINITIONS
 ]
+
+
+def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
+    return (input_tokens / 1_000_000) * PRICE_PER_M_INPUT_TOKENS + (output_tokens / 1_000_000) * PRICE_PER_M_OUTPUT_TOKENS
 
 
 def handle_open_ended(phone: str, text: str, state: dict, client: "openai.OpenAI | None" = None) -> tuple[str, dict]:
@@ -44,7 +63,19 @@ def handle_open_ended(phone: str, text: str, state: dict, client: "openai.OpenAI
 
     messages = [{"role": "system", "content": system_prompt(SMS_ADAPTATION)}] + list(history)
     for _ in range(MAX_TOOL_ITERATIONS):
+        start = time.perf_counter()
         response = client.chat.completions.create(model=MODEL, tools=TOOLS, messages=messages)
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+        output_tokens = getattr(usage, "completion_tokens", None) if usage else None
+        cost = _estimate_cost(input_tokens, output_tokens) if input_tokens is not None and output_tokens is not None else None
+        log_llm_call(
+            actor="sms_llm_fallback", provider="openai", model=MODEL, latency_ms=latency_ms,
+            input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost_usd=cost,
+        )
+
         message = response.choices[0].message
 
         if not message.tool_calls:
