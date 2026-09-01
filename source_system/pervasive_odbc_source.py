@@ -182,6 +182,29 @@ def read_appointments_normalized():
     return result
 
 
+# --- Writes: start with reschedule (UPDATE an existing row) only.
+# Deliberately NOT building "create a new appointment" (INSERT) yet --
+# that needs real-world confirmation of how Visit ID and other
+# required fields (Resource ID, Tx class ID, etc.) get assigned, which
+# hasn't been investigated. Updating a known existing row is much
+# lower-risk than guessing at insert requirements. ---
+
+def write_reschedule(visit_id, new_start, new_end):
+    """Moves an EXISTING appointment (identified by its real Visit ID)
+    to a new date/time. Splits the datetime back into separate Date/
+    Start time/End time columns -- the reverse of how they're combined
+    in read_appointments_normalized(). Leaves Cancel status/Confirmed
+    date untouched."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        'UPDATE "Appointments" SET "Date" = ?, "Start time" = ?, "End time" = ? WHERE "Visit ID" = ?',
+        (new_start.date(), new_start.time(), new_end.time(), visit_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 if __name__ == "__main__":
     # Column names and sample rows already confirmed real -- this now
     # exercises the actual normalized readers used by sync.py, so you

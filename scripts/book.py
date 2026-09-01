@@ -17,6 +17,7 @@ database problem, after logging the failure. Callers (sms_conversation.py,
 webhook_server.py) catch SchedulingError once at their own boundary and
 show a warm fallback message -- see handle_inbound_sms's try/except.
 """
+import os
 import sys
 import sqlite3
 from datetime import datetime
@@ -30,6 +31,14 @@ from audit_log import log_access
 SOURCE_DB = Path(__file__).parent.parent / "source_system" / "practiceworks_sim.db"
 MIRROR_DB = Path(__file__).parent.parent / "mirror_system" / "mirror.db"
 LOOKUP_DB = Path(__file__).parent.parent / "mirror_system" / "identity_lookup.db"
+
+# "sqlite" (default) writes reschedules back to the fake simulated
+# source_system database. "pervasive" writes back to the real
+# PracticeWorks database via source_system/pervasive_odbc_source.py.
+# Same pattern as LLM_PROVIDER in sms_conversation.py -- callers of
+# reschedule_appointment() never need to know or care which backend is
+# active, only this one env var changes.
+SOURCE_BACKEND = os.environ.get("SOURCE_BACKEND", "sqlite").lower()
 
 
 class SchedulingError(Exception):
@@ -194,14 +203,27 @@ def reschedule_appointment(
         raise SchedulingError("could not update appointment") from e
 
     try:
-        src = sqlite3.connect(SOURCE_DB)
-        src.execute(
-            "UPDATE appointments SET start_time = ?, end_time = ?, status = 'confirmed' WHERE id = ? AND patient_id = ?",
-            (new_start.isoformat(), new_end.isoformat(), appointment_id, source_patient_id),
-        )
-        src.commit()
-        src.close()
-    except sqlite3.Error as e:
+        if SOURCE_BACKEND == "pervasive":
+            # Real write-back, reschedule (UPDATE) only -- new-appointment
+            # (INSERT) creation against Pervasive isn't built yet, see
+            # pervasive_odbc_source.py's comment on why that's riskier.
+            sys.path.insert(0, str(Path(__file__).parent.parent / "source_system"))
+            from pervasive_odbc_source import write_reschedule
+            write_reschedule(appointment_id, new_start, new_end)
+        else:
+            src = sqlite3.connect(SOURCE_DB)
+            src.execute(
+                "UPDATE appointments SET start_time = ?, end_time = ?, status = 'confirmed' WHERE id = ? AND patient_id = ?",
+                (new_start.isoformat(), new_end.isoformat(), appointment_id, source_patient_id),
+            )
+            src.commit()
+            src.close()
+    except Exception as e:
+        # Broad except here on purpose: this branch runs either sqlite3
+        # calls or pyodbc calls depending on SOURCE_BACKEND, and both
+        # need to land in the same SchedulingError wrapping -- pyodbc
+        # isn't imported at module level (it's not installed on most
+        # machines), so its exception type can't be named directly here.
         log_access(
             actor, "reschedule_appointment", patient_id=patient_id, success=False,
             detail=f"MIRROR UPDATED BUT SOURCE WRITE FAILED (out of sync until next reconciliation): {e}",

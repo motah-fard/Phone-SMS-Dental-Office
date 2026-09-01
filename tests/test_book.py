@@ -5,6 +5,8 @@ through. Covers the happy paths, the security-relevant behaviors
 guessed id), and the error-handling paths (SchedulingError on a DB
 failure, not a raw crash).
 """
+import sys
+import types
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -204,6 +206,43 @@ def test_reschedule_appointment_raises_scheduling_error_when_source_write_fails(
     write fails -- exercises the second except block, distinct from the
     mirror-failure test above."""
     monkeypatch.setattr(book, "SOURCE_DB", Path("/nonexistent_dir_xyz_12345/source.db"))
+    with pytest.raises(book.SchedulingError):
+        book.reschedule_appointment(1, datetime.now(), datetime.now(), 1, actor="test")
+
+
+def test_reschedule_appointment_uses_pervasive_write_when_backend_selected(fresh_db, monkeypatch):
+    """SOURCE_BACKEND=pervasive must call pervasive_odbc_source.write_reschedule
+    instead of touching the fake SOURCE_DB -- proven with a fake module
+    injected into sys.modules, same technique as test_sync_from_pervasive.py,
+    since the real file needs pyodbc + a live ODBC connection."""
+    calls = []
+    fake_module = types.ModuleType("pervasive_odbc_source")
+    fake_module.write_reschedule = lambda visit_id, new_start, new_end: calls.append((visit_id, new_start, new_end))
+    monkeypatch.setitem(sys.modules, "pervasive_odbc_source", fake_module)
+    monkeypatch.setattr(book, "SOURCE_BACKEND", "pervasive")
+
+    patient = book.resolve_patient_by_phone("+15551230001", actor="test")
+    appt = book.get_upcoming_appointments(patient["patient_id"], actor="test")[0]
+    new_start = datetime.now() + timedelta(days=3)
+    new_end = new_start + timedelta(minutes=30)
+
+    book.reschedule_appointment(
+        appt["appointment_id"], new_start, new_end, patient["source_patient_id"], actor="test",
+    )
+
+    assert calls == [(appt["appointment_id"], new_start, new_end)]
+
+
+def test_reschedule_appointment_pervasive_failure_raises_scheduling_error(fresh_db, monkeypatch):
+    fake_module = types.ModuleType("pervasive_odbc_source")
+
+    def boom(visit_id, new_start, new_end):
+        raise RuntimeError("simulated ODBC write failure")
+
+    fake_module.write_reschedule = boom
+    monkeypatch.setitem(sys.modules, "pervasive_odbc_source", fake_module)
+    monkeypatch.setattr(book, "SOURCE_BACKEND", "pervasive")
+
     with pytest.raises(book.SchedulingError):
         book.reschedule_appointment(1, datetime.now(), datetime.now(), 1, actor="test")
 
