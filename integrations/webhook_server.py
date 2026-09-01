@@ -42,6 +42,14 @@ from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Must happen before any of this project's own modules are imported --
+# several of them (book.py's SOURCE_BACKEND, sms_conversation.py's
+# LLM_PROVIDER) read their env var at import time, so .env has to be
+# loaded into os.environ first or those reads see nothing.
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 from flask import Flask, request, jsonify
 from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
