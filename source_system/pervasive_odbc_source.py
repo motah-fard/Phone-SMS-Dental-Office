@@ -49,8 +49,12 @@ DEFAULT_WORK_START = "08:00"
 DEFAULT_WORK_END = "17:00"
 
 
-def get_connection():
-    return pyodbc.connect(f"DSN={DSN_NAME};")
+def get_connection(dsn: str | None = None):
+    """dsn overrides DSN_NAME for one call -- used by
+    scripts/check_pworks_readonly.py to read from a separate PWORKS_DSN
+    without touching the module-level default every other script here
+    relies on staying pointed at Tutor_DSN."""
+    return pyodbc.connect(f"DSN={dsn or DSN_NAME};")
 
 
 # --- Raw readers (full SELECT *, for inspection -- see __main__ below) ---
@@ -109,11 +113,11 @@ def read_work_hours():
 # fake tables, so scripts/sync.py's sync_from_pervasive() can populate
 # mirror.db/identity_lookup.db the same way regardless of source. ---
 
-def read_patients_normalized():
+def read_patients_normalized(dsn: str | None = None):
     """Returns (person_id, first_name, last_name, dob_iso_or_None, phone)
     tuples for real patients only (Person ID > 0, actually present in
     Patient File)."""
-    conn = get_connection()
+    conn = get_connection(dsn)
     cur = conn.cursor()
     cur.execute(
         """
@@ -131,12 +135,12 @@ def read_patients_normalized():
     ]
 
 
-def read_providers_normalized():
+def read_providers_normalized(dsn: str | None = None):
     """Returns (employee_id, display_name, work_start, work_end) tuples
     for staff who can actually be booked as a treating provider (`Can
     be regular Dr` = True) -- excludes front desk/hygienist-only staff
     from what patients are offered as a provider choice."""
-    conn = get_connection()
+    conn = get_connection(dsn)
     cur = conn.cursor()
     cur.execute('SELECT "Employee ID", "First name", "Last name", "Can be regular Dr" FROM "Employee list"')
     rows = cur.fetchall()
@@ -148,14 +152,14 @@ def read_providers_normalized():
     ]
 
 
-def read_appointments_normalized():
+def read_appointments_normalized(dsn: str | None = None):
     """Returns (visit_id, patient_id, provider_id, start_iso, end_iso,
     status, appt_type) tuples for real appointments (Patient ID > 0).
     status is inferred: cancelled if Cancel status is set, confirmed if
     a Confirmed date is on file, otherwise scheduled -- there's no
     human-readable status legend in the schema, this is the best
     available signal."""
-    conn = get_connection()
+    conn = get_connection(dsn)
     cur = conn.cursor()
     cur.execute(
         """

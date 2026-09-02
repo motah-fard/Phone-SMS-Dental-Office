@@ -31,11 +31,13 @@ a real patient's real appointment.
       reuse `Tutor_DSN` pointed somewhere else; a distinct name makes
       it much harder to accidentally run a test script against the
       wrong database.
-- [ ] Point `pervasive_odbc_source.DSN_NAME` at `PWORKS_DSN` **for a
-      read-only check only** — run just `read_patients_normalized()`,
-      `read_providers_normalized()`, `read_appointments_normalized()`
-      and sanity-check the counts and a few real column values against
-      what the front desk actually knows about a few real patients.
+- [ ] Run `scripts/check_pworks_readonly.py` (edit `PWORKS_DSN_NAME` at
+      the top to match what you named the DSN) — it reads real patient/
+      provider/appointment counts and never writes anything, and
+      deliberately never prints a real patient's name, phone, or DOB to
+      the screen (unlike `demo_tutor.py`, this is genuine PHI, not
+      fictional data). Sanity-check the counts against what the front
+      desk actually knows -- does "~X patients" sound right to them?
       This also catches any schema drift between the training copy and
       the live production copy before it matters.
 - [ ] Confirm `SOURCE_BACKEND` stays `sqlite` (or unset) during this

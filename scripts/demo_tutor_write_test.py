@@ -1,15 +1,21 @@
 """
 Tests the REAL write-back path against TUTOR: reschedules one known
-appointment (whichever patient identity_lookup assigns as PT-0002,
-confirmed in the last read-only test run to be Stephanie Abbott with a
-real appointment on file) to a new near-future time, then re-syncs
-FRESH from TUTOR to confirm the change actually persisted on the real
-server -- not just in our local mirror.
+appointment to a new near-future time, then re-syncs FRESH from TUTOR
+to confirm the change actually persisted on the real server -- not
+just in our local mirror.
+
+A single clean run isn't the bar -- run this against SEVERAL different
+patient_ids (see docs/pwors_cutover_plan.md Phase 1) before considering
+the write path solidly proven, since one pass could succeed on a
+patient/appointment combination that happens to avoid some constraint
+a different one would hit.
 
 Only run this against Tutor_DSN. Never set SOURCE_BACKEND=pervasive
 against a DSN pointed at PWORKS.
 
-Run: C:\\path\\to\\32bit\\python.exe scripts\\demo_tutor_write_test.py
+Run: C:\\path\\to\\32bit\\python.exe scripts\\demo_tutor_write_test.py [patient_id]
+     (patient_id defaults to PT-0002 if omitted -- pass a different one,
+     e.g. PT-0001 or PT-0004, to test against another real patient)
 """
 import os
 os.environ["SOURCE_BACKEND"] = "pervasive"
@@ -26,7 +32,7 @@ from init_mirror_db import init_mirror_db, init_lookup_db
 import sync as sync_module
 from book import reschedule_appointment
 
-TARGET_PATIENT_ID = "PT-0002"
+TARGET_PATIENT_ID = sys.argv[1] if len(sys.argv) > 1 else "PT-0002"
 
 
 def line():

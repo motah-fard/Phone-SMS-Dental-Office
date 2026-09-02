@@ -1,0 +1,23 @@
+# Reverse proxy + automatic TLS in front of integrations/serve_production.py.
+#
+# Caddy chosen over nginx specifically for this project: it provisions
+# and renews a real Let's Encrypt certificate automatically just from
+# the domain name below -- no separate certbot setup, no manual renewal
+# cron job. Runs the same way on Windows as on Mac/Linux.
+#
+# Setup, once you have a real domain pointed at this server's public IP:
+#   1. Replace the placeholder domain below with your real one.
+#   2. Install Caddy (https://caddyserver.com/docs/install) -- there's
+#      a Windows installer, no compilation needed.
+#   3. Make sure integrations/serve_production.py is already running
+#      (it must be listening on 127.0.0.1:5000 before Caddy starts).
+#   4. Run: caddy run --config deploy/Caddyfile
+#
+# Point Telnyx's webhook URLs (SMS webhook, voice assistant tools) at
+# https://your-real-domain.example.com/... -- never at the bare
+# 127.0.0.1:5000 address, which isn't reachable from the internet and
+# isn't meant to be.
+
+your-real-domain.example.com {
+    reverse_proxy 127.0.0.1:5000
+}

@@ -6,3 +6,4 @@ anthropic
 openai
 python-dotenv
 tzdata  # required on Windows -- zoneinfo has no timezone data of its own there (Mac/Linux ship it at the OS level)
+waitress  # production WSGI server -- pure-Python, works on Windows (gunicorn does not: it needs the fcntl module, Unix-only)

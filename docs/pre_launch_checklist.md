@@ -41,35 +41,47 @@ surface; it's meant to stay current, not be a one-time snapshot.
       patient consent forms to reflect the new automated systems.
 
 ## Security
-- [ ] Encryption at rest for `mirror.db`, `identity_lookup.db`, and
-      `audit_log.db` once these run on the real server (disk encryption
-      at minimum — BitLocker on Windows).
-- [ ] Restrict OS-level file permissions on those three databases to
+- [ ] Encryption at rest for `mirror.db`, `identity_lookup.db`,
+      `audit_log.db`, and `conversation_state.db` once these run on the
+      real server (disk encryption at minimum — BitLocker on Windows).
+      Needs the actual machine, not something a code change can do.
+- [ ] Restrict OS-level file permissions on those four databases to
       only the service account running this code.
-- [ ] TLS/HTTPS in front of `webhook_server.py` — it has none on its
-      own (Flask's dev server), needs a reverse proxy or hosting
-      platform providing it.
-- [ ] Real WSGI server (gunicorn or similar) instead of Flask's dev
-      server for anything beyond local testing.
-- [ ] Replace in-memory conversation state (`_conversation_state` dict
-      in `webhook_server.py`) with a real table — it currently resets
-      on every restart and won't work with more than one process.
+- [x] Real WSGI server — `integrations/serve_production.py` runs the
+      app via waitress (not gunicorn, which doesn't work on Windows).
+      Verified working (real HTTP request/response, correct 401 on a
+      wrong secret) against a live instance.
+- [ ] TLS/HTTPS in front of it — `deploy/Caddyfile` is ready, but needs
+      a real domain name pointed at the server's public IP before it
+      can actually run (Caddy then handles the certificate automatically).
+- [x] Persistent (not in-memory) conversation state —
+      `integrations/conversation_store.py`, SQLite-backed, survives a
+      restart and works correctly with more than one process.
+- [x] Staged rollout is now an enforced runtime control, not just a
+      plan — see `ROLLOUT_STAGE` in `.env.example` and
+      `conversation/rollout_stage.py`.
 - [ ] Set up monitoring/alerting for failed SMS sends (currently just a
       print statement — see the `TelnyxError` handling in
       `telnyx_sms_webhook`) and for repeated failed identity
       verifications (a real audit-log signal worth alerting on).
+- [ ] Run `integrations/serve_production.py` as an actual persistent
+      service (see `docs/deployment.md`'s NSSM section) so it survives
+      a reboot without manual restarting.
 - [ ] Rate limiting on the webhook/tool endpoints (not urgent until real
       call/text volume, but needed before go-live).
 
 ## Organizational (the practice's decisions, not code)
 - [ ] Security Risk Assessment (SRA) — HIPAA's Security Rule requires
       one; this new system should trigger an update to whatever the
-      practice already has, or its first one.
+      practice already has, or its first one. A starting draft is at
+      `docs/templates/security_risk_assessment_outline.md` — needs the
+      practice/a consultant to actually fill it in, not just exist.
 - [ ] Backup/contingency plan for the new databases, documented as part
       of the practice's HIPAA contingency plan.
 - [ ] Data retention/disposal policy for `audit_log.db` and old/
       cancelled mirror appointment records — a practice decision, not
-      something to decide unilaterally in code.
+      something to decide unilaterally in code. A starting draft is at
+      `docs/templates/data_retention_policy_template.md`.
 - [ ] Clarify the AI engineer contractor's own workforce/BAA status
       given direct access to the live PracticeWorks server.
 - [ ] **After-hours emergency protocol** — what should Moty say to a

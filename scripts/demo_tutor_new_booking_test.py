@@ -14,7 +14,12 @@ comes back and the mapping gets adjusted from there.
 Only run this against Tutor_DSN. Never set SOURCE_BACKEND=pervasive
 against a DSN pointed at PWORKS.
 
-Run: C:\\path\\to\\32bit\\python.exe scripts\\demo_tutor_new_booking_test.py
+A single clean run isn't the bar -- run this against SEVERAL different
+patient_ids (see docs/pwors_cutover_plan.md Phase 1) before considering
+this write path solidly proven.
+
+Run: C:\\path\\to\\32bit\\python.exe scripts\\demo_tutor_new_booking_test.py [patient_id]
+     (patient_id defaults to PT-0002 if omitted)
 """
 import os
 os.environ["SOURCE_BACKEND"] = "pervasive"
@@ -31,7 +36,7 @@ from init_mirror_db import init_mirror_db, init_lookup_db
 import sync as sync_module
 from book import book_new_appointment
 
-TARGET_PATIENT_ID = "PT-0002"  # Stephanie Abbott, per earlier read-only test
+TARGET_PATIENT_ID = sys.argv[1] if len(sys.argv) > 1 else "PT-0002"  # Stephanie Abbott, per earlier read-only test
 
 
 def line():

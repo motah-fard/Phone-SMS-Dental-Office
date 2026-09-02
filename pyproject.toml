@@ -24,6 +24,14 @@ omit = [
     "*/demo_tutor.py",
     "*/demo_tutor_write_test.py",
     "*/demo_tutor_new_booking_test.py",
+    "*/check_pworks_readonly.py",
+    # Real deployment entry point -- starts an actual waitress server on
+    # a real port, not meaningfully unit-testable without binding one
+    # during the test run. Already verified manually with a live HTTP
+    # request/response against a running instance (see the commit that
+    # introduced this file) -- that's the actual proof this works, not
+    # something pytest coverage can capture for a bare entry-point script.
+    "*/serve_production.py",
 ]
 
 [tool.coverage.report]
